@@ -7,19 +7,41 @@ import { AIService } from "../services/aiService";
 interface PainelAdminProps {
   onRefreshMatches: () => void;
   matches: Match[];
+  currentUser?: {
+    name: string;
+    email: string;
+    plan: "Free" | "Pro" | "VIP" | "Enterprise";
+    avatar: string;
+  } | null;
+  onCurrentUserChange?: (newPlan: "Free" | "Pro" | "VIP" | "Enterprise") => void;
 }
 
-export default function PainelAdmin({ onRefreshMatches, matches }: PainelAdminProps) {
+export default function PainelAdmin({ onRefreshMatches, matches, currentUser, onCurrentUserChange }: PainelAdminProps) {
   // Navigation internal tabs: "usuarios" | "jogos" | "logs"
   const [internalTab, setInternalTab] = useState<"usuarios" | "jogos" | "logs">("jogos");
 
   // User list state
   const [users, setUsers] = useState([
-    { id: "usr_102", name: "Felipe Pires (Você)", email: "fjosemoraescx@gmail.com", role: "admin", status: "VIP Ativo", signupDate: "12/05/2026" },
+    { id: "usr_102", name: "Felipe Pires (Você)", email: "fjosemoraescx@gmail.com", role: "admin", status: currentUser?.plan && currentUser.plan !== "Free" ? "VIP Ativo" : "Free Tier", signupDate: "12/05/2026" },
     { id: "usr_582", name: "Gabriel Menezes", email: "gabriel.menezes@bol.com.br", role: "user", status: "Free Tier", signupDate: "18/06/2026" },
     { id: "usr_941", name: "Ana Carolina Santos", email: "carol.santos@gmail.com", role: "user", status: "VIP Ativo", signupDate: "22/06/2026" },
     { id: "usr_112", name: "Rodrigo Almeida", email: "rodrigo.almeida@yahoo.com", role: "user", status: "Free Tier", signupDate: "27/06/2026" }
   ]);
+
+  // Synchronize usr_102 status when currentUser plan changes
+  useEffect(() => {
+    setUsers((prev) =>
+      prev.map((u) => {
+        if (u.id === "usr_102") {
+          return {
+            ...u,
+            status: currentUser?.plan && currentUser.plan !== "Free" ? "VIP Ativo" : "Free Tier"
+          };
+        }
+        return u;
+      })
+    );
+  }, [currentUser]);
 
   // Form for custom Match Addition
   const [newMatchHome, setNewMatchHome] = useState("");
@@ -62,6 +84,9 @@ export default function PainelAdmin({ onRefreshMatches, matches }: PainelAdminPr
         if (user.id === userId) {
           const nextStatus = user.status === "VIP Ativo" ? "Free Tier" : "VIP Ativo";
           addLog(`ALTERACAO_ASSINATURA_USUARIO_PARA_${nextStatus.replace(" ", "_").toUpperCase()}`, user.name, "warning");
+          if (userId === "usr_102" && onCurrentUserChange) {
+            onCurrentUserChange(nextStatus === "VIP Ativo" ? "VIP" : "Free");
+          }
           return { ...user, status: nextStatus };
         }
         return user;

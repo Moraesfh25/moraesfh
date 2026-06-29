@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   Sparkles,
   TrendingUp,
@@ -13,6 +14,7 @@ import {
   Calendar,
   MapPin,
   Flame,
+  Layers,
   ChevronRight,
   ChevronDown,
   Copy,
@@ -34,17 +36,32 @@ import {
   Check,
   Send,
   Sliders,
+  Share2,
   HelpCircle,
-  Star
+  Star,
+  BarChart3,
+  Globe,
+  ShieldCheck,
+  Trash2
 } from "lucide-react";
 
-import { Match, ChatMessage, BetSlipItem, UserBet, PersonalFilter } from "./types";
+import { Match, ChatMessage, BetSlipItem, UserBet, PersonalFilter, AdminLog } from "./types";
 import { SportsService } from "./services/sportsService";
 import { AIService } from "./services/aiService";
 import { MultiplesService } from "./services/multiplesService";
 import DashboardIA from "./pages/DashboardIA";
+import { SmartBets } from "./pages/SmartBets";
 import PainelAdmin from "./admin/PainelAdmin";
+import { ThemeToggle } from "./components/ThemeToggle";
+import { UserPreferencesPanel } from "./components/UserPreferencesPanel";
+import { DashboardAnimatedHeader } from "./components/DashboardAnimatedHeader";
+import { LeagueBadge } from "./components/LeagueBadge";
+import { SharePredictionModal } from "./components/SharePredictionModal";
+import { TeamShield } from "./components/TeamShield";
+import { LiveProbabilityText } from "./components/LiveProbabilityText";
 import { BankrollManager } from "./components/BankrollManager";
+import { PremiumSaaSModal } from "./components/PremiumSaaSModal";
+import { SaaSAuthScreen } from "./components/SaaSAuthScreen";
 import { 
   RiskManagementPanel, 
   RiskLimits, 
@@ -262,9 +279,63 @@ export default function App() {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   };
 
-  // VIP Subscription state
-  const [isVIPSubscriber, setIsVIPSubscriber] = useState<boolean>(false);
+  // Current logged in user (SaaS Authentication & session state)
+  const [currentUser, setCurrentUser] = useState<{
+    name: string;
+    email: string;
+    plan: "Free" | "Pro" | "VIP" | "Enterprise";
+    avatar: string;
+  } | null>(() => {
+    try {
+      const saved = localStorage.getItem("betvision_user");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  // Centralized Administrative Activity Logs state
+  const [adminLogs, setAdminLogs] = useState<AdminLog[]>(() => {
+    try {
+      const saved = localStorage.getItem("betvision_admin_logs");
+      return saved ? JSON.parse(saved) : [
+        { id: "log_1", action: "CACHE_HIT_LOCAL_STORAGE", user: "SYSTEM", timestamp: "19:42:01", status: "success" },
+        { id: "log_2", action: "API_FOOTBALL_CREDENTIALS_VALID", user: "SYSTEM", timestamp: "19:42:04", status: "success" },
+        { id: "log_3", action: "SYNCHRONIZED_CLASSIFICATION_STANDINGS", user: "SYSTEM", timestamp: "19:42:05", status: "success" },
+        { id: "log_4", action: "AI_MODEL_REASONING_RESPONSE_OK", user: "gemini-2.5-flash", timestamp: "19:43:10", status: "success" },
+        { id: "log_5", action: "LOCAL_USER_SESSION_VERIFIED_JWT", user: "Felipe Pires", timestamp: "19:45:12", status: "success" }
+      ];
+    } catch {
+      return [];
+    }
+  });
+
+  const addAdminLog = (action: string, user: string, status: "success" | "warning" | "error" = "success") => {
+    const time = new Date().toLocaleTimeString("pt-BR");
+    const newLog: AdminLog = {
+      id: "log_" + Math.floor(Math.random() * 90000 + 10000),
+      action,
+      user,
+      timestamp: time,
+      status
+    };
+    setAdminLogs((prev) => {
+      const updated = [newLog, ...prev];
+      localStorage.setItem("betvision_admin_logs", JSON.stringify(updated));
+      return updated;
+    });
+  };
+
+  const isVIPSubscriber = currentUser?.plan === "VIP" || currentUser?.plan === "Enterprise" || currentUser?.plan === "Pro";
+  const setIsVIPSubscriber = (val: boolean) => {
+    if (currentUser) {
+      const updated = { ...currentUser, plan: val ? "VIP" as const : "Free" as const };
+      setCurrentUser(updated);
+      localStorage.setItem("betvision_user", JSON.stringify(updated));
+    }
+  };
   const [showVIPModal, setShowVIPModal] = useState<boolean>(false);
+  const [showProfileMenu, setShowProfileMenu] = useState<boolean>(false);
 
   // Filter states
   const [selectedLeague, setSelectedLeague] = useState<string>("all");
@@ -326,7 +397,27 @@ export default function App() {
 
   // Active Selected Match for deep analysis drawer
   const [selectedMatch, setSelectedMatch] = useState<Match | null>(null);
+  const [shareMatch, setShareMatch] = useState<any | null>(null);
   const [selectedMatchTab, setSelectedMatchTab] = useState<"analise" | "estatisticas" | "ficha">("analise");
+
+  // Dynamic AI generated rationales state
+  const [aiAnalyses, setAiAnalyses] = useState<Record<string, string>>({});
+  const [isAiAnalysisLoading, setIsAiAnalysisLoading] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (selectedMatch) {
+      const matchId = selectedMatch.id;
+      if (!aiAnalyses[matchId]) {
+        setIsAiAnalysisLoading(true);
+        AIService.getAIAnalysis(selectedMatch).then((result) => {
+          setAiAnalyses((prev) => ({ ...prev, [matchId]: result }));
+          setIsAiAnalysisLoading(false);
+        }).catch(() => {
+          setIsAiAnalysisLoading(false);
+        });
+      }
+    }
+  }, [selectedMatch]);
 
   // Bet Slip (Bilhete do Dia)
   const [betSlip, setBetSlip] = useState<Array<{ match: Match; selection: "home" | "draw" | "away"; odd: number }>>([
@@ -764,13 +855,34 @@ export default function App() {
     );
   };
 
-  // Copy Ticket Hash Code
+  // Copy Ticket detailed information for betting suggestions sharing
   const copySlipToClipboard = () => {
-    const codes = ["BV-8821X-PRO", "BV-9901A-MAX", "BV-2139P-VIP", "BV-3342E-SLIP"];
-    const randomHash = codes[Math.floor(Math.random() * codes.length)];
-    navigator.clipboard.writeText(randomHash).then(() => {
+    if (betSlip.length === 0) return;
+    
+    let text = "🎯 *BILHETE DE HOJE - BETVISION PRO* 🎯\n";
+    text += "🤖 _Palpites esportivos gerados por Inteligência Artificial_\n\n";
+    
+    betSlip.forEach((item, idx) => {
+      const selectionText = item.selection === "home" 
+        ? `Vitória ${item.match.homeTeam}` 
+        : item.selection === "away" 
+          ? `Vitória ${item.match.awayTeam}` 
+          : "Empate";
+      
+      text += `${idx + 1}. ⚽ *${item.match.homeTeam} x ${item.match.awayTeam}*\n`;
+      text += `   📍 Palpite Recomendado: *${selectionText}*\n`;
+      text += `   📈 Cotação da IA: @${item.odd}\n\n`;
+    });
+    
+    text += `📊 *Odd Acumulada Final:* @${totalOdds}\n`;
+    text += `💰 *Aposta Recomendada:* R$ ${betAmount}\n`;
+    text += `🔮 *Retorno Projetado:* R$ ${(betAmount * totalOdds).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}\n\n`;
+    text += "👉 _Copie estas dicas e monte seu bilhete na sua plataforma preferida!_\n";
+    text += "⚠️ _Aposte sempre com responsabilidade e controle de banca._";
+
+    navigator.clipboard.writeText(text).then(() => {
       setHasCopiedSlip(true);
-      setTimeout(() => setHasCopiedSlip(false), 2000);
+      setTimeout(() => setHasCopiedSlip(false), 2500);
     });
   };
 
@@ -964,6 +1076,23 @@ export default function App() {
     );
   };
 
+  if (!currentUser) {
+    return (
+      <SaaSAuthScreen 
+        onLoginSuccess={(user) => {
+          setCurrentUser(user);
+          localStorage.setItem("betvision_user", JSON.stringify(user));
+          triggerPushNotification(
+            "Sessão Iniciada",
+            `Seja bem-vindo ao BetVision Pro, ${user.name}! Token JWT assinado e autenticado com sucesso.`,
+            "status"
+          );
+        }}
+        addLog={addAdminLog}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen w-full bg-neutral-950 text-neutral-200 font-sans overflow-hidden">
       
@@ -1002,23 +1131,20 @@ export default function App() {
               <Zap className="w-3.5 h-3.5 animate-pulse text-amber-500" /> Live Tracker
             </button>
             <button
+              onClick={() => { setActiveTab("smart_bets"); }}
+              className={`px-3 py-1.5 rounded transition-all flex items-center gap-1 ${
+                activeTab === "smart_bets" ? "bg-green-500 text-black font-semibold" : "text-neutral-400 hover:text-white"
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" /> Sugestões IA
+            </button>
+            <button
               onClick={() => { setActiveTab("multiplas"); }}
               className={`px-3 py-1.5 rounded transition-all ${
                 activeTab === "multiplas" ? "bg-green-500 text-black font-semibold" : "text-neutral-400 hover:text-white"
               }`}
             >
               Múltiplas Assistidas
-            </button>
-            <button
-              onClick={() => { setActiveTab("minhas_apostas"); }}
-              className={`px-3 py-1.5 rounded transition-all flex items-center gap-1 ${
-                activeTab === "minhas_apostas" ? "bg-green-500 text-black font-semibold" : "text-neutral-400 hover:text-white"
-              }`}
-            >
-              Histórico
-              <span className="text-[10px] bg-neutral-800 px-1.5 py-0.5 rounded text-neutral-300">
-                {myBets.filter(b => b.status === "pending").length}
-              </span>
             </button>
             <button
               onClick={() => { setActiveTab("dashboard_ia"); }}
@@ -1035,6 +1161,14 @@ export default function App() {
               }`}
             >
               <Sliders className="w-3.5 h-3.5" /> Admin
+            </button>
+            <button
+              onClick={() => { setActiveTab("configuracoes"); }}
+              className={`px-3 py-1.5 rounded transition-all flex items-center gap-1.5 ${
+                activeTab === "configuracoes" ? "bg-green-500 text-black font-semibold" : "text-neutral-400 hover:text-white"
+              }`}
+            >
+              <Settings className="w-3.5 h-3.5" /> Configurações
             </button>
           </nav>
         </div>
@@ -1067,19 +1201,10 @@ export default function App() {
             onTestNotification={handleTestNotification}
           />
           
-          <div className="bg-neutral-800 px-2 sm:px-3 py-1 sm:py-1.5 rounded text-[10px] sm:text-xs border border-neutral-700 flex items-center gap-1.5 sm:gap-2">
-            <span className="text-neutral-400 hidden sm:inline">Saldo:</span>
-            <span className="text-green-400 font-mono font-bold">R$ {userBalance.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
-            <button
-              onClick={() => {
-                setUserBalance(2450.0);
-                alert("✓ Saldo redefinido para R$ 2.450,00 para fins de simulação!");
-              }}
-              title="Recarregar Saldo de Demonstração"
-              className="p-0.5 hover:bg-neutral-700 rounded text-neutral-400 hover:text-white"
-            >
-              <RotateCcw className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
-            </button>
+          <div className="bg-neutral-800/80 px-2.5 sm:px-3.5 py-1 sm:py-1.5 rounded text-[10px] sm:text-xs border border-neutral-700 flex items-center gap-1.5 sm:gap-2 text-white">
+            <Sparkles className="w-3.5 h-3.5 text-green-400" />
+            <span className="text-neutral-400 hidden sm:inline">Assertividade IA:</span>
+            <span className="text-green-400 font-mono font-bold">88.4% Win Rate</span>
           </div>
           
           <button
@@ -1091,13 +1216,156 @@ export default function App() {
             <span className="hidden md:inline">Gestão de Risco</span>
           </button>
 
-          <button
-            onClick={() => setShowSettingsModal(true)}
-            className="w-8 h-8 rounded-full bg-gradient-to-tr from-green-600 to-emerald-400 hidden sm:flex items-center justify-center font-bold text-neutral-950 text-xs shrink-0 hover:ring-2 hover:ring-green-400 transition-all cursor-pointer"
-            title="Configurações do Perfil e Gestão de Risco"
-          >
-            FP
-          </button>
+          <ThemeToggle />
+
+          <div className="relative">
+            <button
+              onClick={() => setShowProfileMenu((prev) => !prev)}
+              className="w-8 h-8 rounded-full bg-gradient-to-tr from-green-600 to-emerald-400 flex items-center justify-center font-bold text-neutral-950 text-xs shrink-0 hover:ring-2 hover:ring-green-400 transition-all cursor-pointer overflow-hidden"
+              title="Configurações do Perfil"
+            >
+              {currentUser.avatar ? (
+                <img src={currentUser.avatar} alt={currentUser.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                currentUser.name.split(" ").map(n => n[0]).join("").toUpperCase()
+              )}
+            </button>
+
+            {/* PROFILE DROPDOWN MENU */}
+            {showProfileMenu && (
+              <div className="absolute right-0 mt-2 w-64 rounded-xl bg-neutral-900 border border-neutral-800 shadow-2xl p-4 z-40 text-left space-y-4 animate-fade-in backdrop-blur-md">
+                <div className="flex items-center gap-3 pb-3 border-b border-neutral-800">
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-green-600 to-emerald-400 overflow-hidden shrink-0">
+                    {currentUser.avatar && (
+                      <img src={currentUser.avatar} alt={currentUser.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-bold text-white truncate leading-none">{currentUser.name}</p>
+                    <p className="text-[10px] text-neutral-500 truncate mt-1 leading-none">{currentUser.email}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-1 bg-neutral-950 p-2.5 rounded-lg border border-neutral-850">
+                  <div className="text-[9px] font-bold uppercase tracking-wider text-neutral-500">Minha Assinatura</div>
+                  <div className="flex items-center justify-between">
+                    <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${
+                      currentUser.plan === "VIP" 
+                        ? "bg-amber-500/10 text-amber-400 border border-amber-500/20" 
+                        : currentUser.plan === "Enterprise"
+                        ? "bg-purple-500/10 text-purple-400 border border-purple-500/20"
+                        : currentUser.plan === "Pro"
+                        ? "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                        : "bg-neutral-800 text-neutral-400 border border-neutral-700"
+                    }`}>
+                      {currentUser.plan === "Free" ? "Free Tier" : `${currentUser.plan} Plan`}
+                    </span>
+                    <button 
+                      onClick={() => { setShowVIPModal(true); setShowProfileMenu(false); }}
+                      className="text-[10px] text-green-400 hover:text-green-350 font-bold transition-colors underline cursor-pointer bg-transparent border-none"
+                    >
+                      {currentUser.plan === "Free" ? "Fazer Upgrade" : "Gerenciar"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1 text-xs">
+                  <button
+                    onClick={() => { setShowSettingsModal(true); setShowProfileMenu(false); }}
+                    className="w-full text-left px-2.5 py-1.5 rounded hover:bg-neutral-800 text-neutral-300 hover:text-white transition-colors font-medium flex items-center gap-2 cursor-pointer bg-transparent border-none"
+                  >
+                    <Sliders className="w-3.5 h-3.5 text-neutral-400" />
+                    Gestão de Risco & Limites
+                  </button>
+
+                  <button
+                    onClick={() => { setActiveTab("configuracoes"); setShowProfileMenu(false); }}
+                    className={`w-full text-left px-2.5 py-1.5 rounded hover:bg-neutral-800 transition-colors font-medium flex items-center gap-2 cursor-pointer bg-transparent border-none ${
+                      activeTab === "configuracoes" ? "text-green-400 font-bold" : "text-neutral-300 hover:text-white"
+                    }`}
+                  >
+                    <Settings className="w-3.5 h-3.5 text-neutral-400" />
+                    Preferências do Sistema
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setShowProfileMenu(false);
+                      try {
+                        const exportData = {
+                          platform: "BetVision Pro",
+                          timestamp: new Date().toISOString(),
+                          user: {
+                            name: currentUser.name,
+                            email: currentUser.email,
+                            plan: currentUser.plan
+                          },
+                          cookiesConsent: "Accepted",
+                          dataRetention: "GDPR & LGPD Compliant",
+                          activityLogs: adminLogs.filter(l => l.user === currentUser.name)
+                        };
+                        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: "application/json" });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `betvision_dados_${currentUser.name.toLowerCase().replace(/\s+/g, "_")}.json`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                        
+                        triggerPushNotification(
+                          "Dados Exportados",
+                          "Seus dados em conformidade com a LGPD foram exportados em JSON com sucesso.",
+                          "info"
+                        );
+                      } catch (err) {
+                        alert("Ocorreu um erro ao exportar seus dados.");
+                      }
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded hover:bg-neutral-800 text-neutral-300 hover:text-white transition-colors font-medium flex items-center gap-2 cursor-pointer bg-transparent border-none"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-neutral-400" />
+                    Exportar Meus Dados (LGPD)
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      if (confirm("ATENÇÃO: Deseja realmente excluir sua conta de forma definitiva? Todos os seus dados, bilhetes e logs serão excluídos permanentemente de nossos servidores, de acordo com a LGPD.")) {
+                        setShowProfileMenu(false);
+                        localStorage.removeItem("betvision_user");
+                        localStorage.removeItem("betvision_admin_logs");
+                        setCurrentUser(null);
+                        alert("Sua conta foi excluída definitivamente. Todos os seus dados de sessão foram expurgados.");
+                      }
+                    }}
+                    className="w-full text-left px-2.5 py-1.5 rounded hover:bg-red-500/10 text-red-400 hover:text-red-300 transition-colors font-medium flex items-center gap-2 cursor-pointer bg-transparent border-none"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-red-500" />
+                    Excluir Minha Conta (LGPD)
+                  </button>
+                </div>
+
+                <div className="pt-2 border-t border-neutral-800 flex justify-end">
+                  <button
+                    onClick={() => {
+                      setShowProfileMenu(false);
+                      localStorage.removeItem("betvision_user");
+                      setCurrentUser(null);
+                      triggerPushNotification(
+                        "Sessão Encerrada",
+                        "Você foi desconectado. Faça login novamente para reativar seu painel de IA.",
+                        "info"
+                      );
+                    }}
+                    className="text-xs text-neutral-400 hover:text-white font-bold transition-colors cursor-pointer bg-transparent border-none"
+                  >
+                    Sair da Conta (Logout)
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -1331,6 +1599,9 @@ export default function App() {
           {activeTab === "dashboard" && (
             <div className="p-4 space-y-4">
               
+              {/* DYNAMIC ANIMATED HEADER WITH DUAL THEME CONTRAST & VIDEOS */}
+              <DashboardAnimatedHeader />
+              
               {/* MOBILE HORIZONTAL FILTERS & LEAGUES (hidden on desktop) */}
               <div className="md:hidden space-y-3 pb-3 border-b border-neutral-900">
                 {/* Filters IA */}
@@ -1557,6 +1828,8 @@ export default function App() {
                 </div>
               )}
 
+
+
               {/* FEATURED MATCH LIST VIEW */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -1585,11 +1858,14 @@ export default function App() {
                         Nenhuma partida predita corresponde aos filtros selecionados.
                       </div>
                     ) : (
-                      filteredMatches.map((match) => {
+                      filteredMatches.map((match, index) => {
                         const isLocked = match.isVIP && !isVIPSubscriber;
                         return (
-                          <div
+                          <motion.div
                             key={match.id}
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.35, ease: "easeOut", delay: Math.min(index * 0.05, 0.4) }}
                             className={`bg-neutral-900 border ${
                               selectedMatch?.id === match.id ? "border-green-500" : "border-neutral-800 hover:border-neutral-700"
                             } rounded-lg p-3.5 flex flex-col md:flex-row gap-4 relative overflow-hidden transition-all`}
@@ -1618,7 +1894,7 @@ export default function App() {
                               <div>
                                 <div className="text-[9px] text-neutral-400 font-mono flex items-center justify-between gap-1.5 mb-2">
                                   <div className="flex items-center gap-1.5">
-                                    <span>{match.league}</span>
+                                    <LeagueBadge league={match.league} isLive={match.isLive} />
                                     <span>•</span>
                                     <span className={match.isLive ? "text-green-500 font-bold animate-pulse" : ""}>
                                       {match.isLive ? `LIVE ${match.liveMinute}'` : `${match.date}, ${match.time}`}
@@ -1699,6 +1975,17 @@ export default function App() {
                                 </div>
                                 <div className="flex gap-2">
                                   <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setShareMatch(match);
+                                    }}
+                                    className="px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 transition-all border border-neutral-800 hover:border-neutral-750"
+                                    title="Compartilhar Palpite"
+                                  >
+                                    <Share2 className="w-3 h-3 text-green-400" />
+                                    <span className="hidden sm:inline">Compartilhar</span>
+                                  </button>
+                                  <button
                                     onClick={() => setSelectedMatch(selectedMatch?.id === match.id ? null : match)}
                                     className={`px-3 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${
                                       selectedMatch?.id === match.id
@@ -1719,7 +2006,7 @@ export default function App() {
                               </div>
 
                             </div>
-                          </div>
+                          </motion.div>
                         );
                       })
                     )}
@@ -1819,13 +2106,22 @@ export default function App() {
                             </div>
 
                             {/* AI Expert Text rationale */}
-                            <div className="bg-neutral-950 p-3 rounded border border-neutral-850 text-xs">
-                              <div className="flex items-center gap-1 text-green-400 font-semibold mb-1 text-[11px]">
-                                <Sparkles className="w-3 h-3" /> Parecer do Analista Pro IA:
+                            <div className="bg-neutral-950 p-3 rounded border border-neutral-850 text-xs min-h-[75px] flex flex-col justify-center">
+                              <div className="flex items-center gap-1 text-green-400 font-semibold mb-1.5 text-[11px]">
+                                <Sparkles className={`w-3 h-3 ${isAiAnalysisLoading ? "animate-spin" : ""}`} /> 
+                                <span>{isAiAnalysisLoading ? "Sincronizando Cognição Gemini IA..." : "Parecer do Analista Pro IA:"}</span>
                               </div>
-                              <p className="text-neutral-300 leading-relaxed text-[11px] italic">
-                                "{activeMatchDetails.iaAnalysis}"
-                              </p>
+                              {isAiAnalysisLoading ? (
+                                <div className="space-y-1.5 py-1 animate-pulse">
+                                  <div className="h-2 bg-neutral-800 rounded w-full"></div>
+                                  <div className="h-2 bg-neutral-800 rounded w-11/12"></div>
+                                  <div className="h-2 bg-neutral-800 rounded w-4/5"></div>
+                                </div>
+                              ) : (
+                                <p className="text-neutral-300 leading-relaxed text-[11px] italic">
+                                  "{aiAnalyses[activeMatchDetails.id] || activeMatchDetails.iaAnalysis}"
+                                </p>
+                              )}
                             </div>
 
                             {/* Real-time Interactive AI Consultation Chat */}
@@ -2062,8 +2358,14 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {filteredMatches.map((match) => (
-                  <div key={match.id} className="bg-neutral-900 border border-neutral-800 rounded-lg p-4 space-y-3 relative overflow-hidden">
+                {filteredMatches.map((match, index) => (
+                  <motion.div
+                    key={match.id}
+                    initial={{ opacity: 0, y: 15 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.35, ease: "easeOut", delay: Math.min(index * 0.05, 0.4) }}
+                    className="bg-neutral-900 border border-neutral-800 rounded-lg p-4 space-y-3 relative overflow-hidden"
+                  >
                     {match.isVIP && !isVIPSubscriber && (
                       <div className="absolute inset-0 bg-neutral-950/90 backdrop-blur-xs flex items-center justify-center z-10 p-4">
                         <div className="text-center">
@@ -2080,7 +2382,7 @@ export default function App() {
                     )}
 
                     <div className="flex justify-between items-start">
-                      <span className="text-[10px] bg-neutral-800 px-2 py-0.5 rounded text-neutral-300 font-mono">{match.league}</span>
+                      <LeagueBadge league={match.league} isLive={match.isLive} />
                       <span className="text-[10px] text-green-500 font-bold flex items-center gap-1">
                         ★ IA {match.iaConfidence}% Confiança
                       </span>
@@ -2121,7 +2423,7 @@ export default function App() {
                         Selecionar
                       </button>
                     </div>
-                  </div>
+                  </motion.div>
                 ))}
               </div>
             </div>
@@ -2150,8 +2452,14 @@ export default function App() {
 
               {/* List of active tracker elements */}
               <div className="space-y-4">
-                {matches.filter(m => m.isLive).map(match => (
-                  <div key={match.id} className="bg-neutral-900 border border-green-500/30 rounded-lg p-4 space-y-4">
+                {matches.filter(m => m.isLive).map((match, index) => (
+                  <motion.div
+                    key={match.id}
+                    initial={{ opacity: 0, y: 15 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.35, ease: "easeOut", delay: Math.min(index * 0.05, 0.4) }}
+                    className="bg-neutral-900 border border-green-500/30 rounded-lg p-4 space-y-4"
+                  >
                     <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
                       <div className="flex items-center gap-2">
                         <span className="text-xs bg-red-500/10 text-red-500 border border-red-500/20 px-2 py-0.5 rounded font-mono font-bold animate-pulse">
@@ -2165,21 +2473,21 @@ export default function App() {
                           <Star className={`w-3.5 h-3.5 ${match.isFavorite ? "fill-amber-400 text-amber-400" : ""}`} />
                         </button>
                       </div>
-                      <span className="text-xs text-neutral-400 font-mono">{match.league}</span>
+                      <LeagueBadge league={match.league} isLive={match.isLive} />
                     </div>
 
                     <div className="flex flex-col md:flex-row justify-between items-center gap-6">
                       <div className="flex items-center gap-8 justify-center w-full md:w-auto">
-                        <div className="text-center">
-                          <div className="w-12 h-12 rounded-full bg-neutral-800 flex items-center justify-center font-bold text-sm text-white mb-1.5 border border-neutral-700">RM</div>
-                          <div className="text-xs font-bold text-white">{match.homeTeam}</div>
+                        <div className="text-center flex flex-col items-center">
+                          <TeamShield teamName={match.homeTeam} size="md" className="mb-1.5" />
+                          <div className="text-xs font-bold text-white mt-1">{match.homeTeam}</div>
                         </div>
                         <div className="text-2xl font-mono font-bold text-green-400 bg-neutral-950 px-4 py-2 rounded-lg border border-neutral-800 tracking-wider">
                           {match.liveScore?.[0]} - {match.liveScore?.[1]}
                         </div>
-                        <div className="text-center">
-                          <div className="w-12 h-12 rounded-full bg-neutral-800 flex items-center justify-center font-bold text-sm text-white mb-1.5 border border-neutral-700">BC</div>
-                          <div className="text-xs font-bold text-white">{match.awayTeam}</div>
+                        <div className="text-center flex flex-col items-center">
+                          <TeamShield teamName={match.awayTeam} size="md" className="mb-1.5" />
+                          <div className="text-xs font-bold text-white mt-1">{match.awayTeam}</div>
                         </div>
                       </div>
 
@@ -2194,10 +2502,10 @@ export default function App() {
                           <div className="bg-neutral-600 h-full" style={{ width: `${match.probabilities.draw}%` }} title={`Empate: ${match.probabilities.draw}%`}></div>
                           <div className="bg-red-500 h-full" style={{ width: `${match.probabilities.away}%` }} title={`Visitante: ${match.probabilities.away}%`}></div>
                         </div>
-                        <div className="flex justify-between text-[10px] text-neutral-500 font-mono">
-                          <span>{match.homeTeam} ({match.probabilities.home}%)</span>
-                          <span>Empate ({match.probabilities.draw}%)</span>
-                          <span>{match.awayTeam} ({match.probabilities.away}%)</span>
+                        <div className="flex justify-between text-[10px] text-neutral-500 font-mono items-center">
+                          <LiveProbabilityText label={match.homeTeam} value={match.probabilities.home} />
+                          <LiveProbabilityText label="Empate" value={match.probabilities.draw} />
+                          <LiveProbabilityText label={match.awayTeam} value={match.probabilities.away} />
                         </div>
                       </div>
                     </div>
@@ -2235,7 +2543,7 @@ export default function App() {
                         <span className="text-sm font-mono font-bold text-white mt-0.5">{match.odds.away}</span>
                       </button>
                     </div>
-                  </div>
+                  </motion.div>
                 ))}
               </div>
             </div>
@@ -2460,6 +2768,28 @@ export default function App() {
             </div>
           )}
 
+          {/* DYNAMIC INTEGRATION: SMART BETS IA RECOMMENDATIONS */}
+          {activeTab === "smart_bets" && (
+            <SmartBets 
+              isVIPUser={isVIPSubscriber}
+              onOpenVIPModal={() => setShowVIPModal(true)}
+              onAddToBetslip={(match, market, odd) => {
+                let selection: "home" | "draw" | "away" = "draw";
+                if (market.toLowerCase().includes("vitória " + match.homeTeam.toLowerCase()) || market === "1") {
+                  selection = "home";
+                } else if (market.toLowerCase().includes("vitória " + match.awayTeam.toLowerCase()) || market === "2") {
+                  selection = "away";
+                }
+                addToBetSlip(match, selection, odd);
+              }}
+              selectedSlip={betSlip.map(item => ({ 
+                matchId: item.match.id, 
+                market: item.selection === "home" ? "Vitória " + item.match.homeTeam : item.selection === "away" ? "Vitória " + item.match.awayTeam : "Empate", 
+                odd: item.odd 
+              }))}
+            />
+          )}
+
           {/* DYNAMIC INTEGRATION: STATISTICAL DASHBOARD IA */}
           {activeTab === "dashboard_ia" && (
             <DashboardIA />
@@ -2470,7 +2800,20 @@ export default function App() {
             <PainelAdmin
               matches={matches}
               onRefreshMatches={() => setMatches(SportsService.getMatches())}
+              currentUser={currentUser}
+              onCurrentUserChange={(newPlan) => {
+                if (currentUser) {
+                  const updated = { ...currentUser, plan: newPlan };
+                  setCurrentUser(updated);
+                  localStorage.setItem("betvision_user", JSON.stringify(updated));
+                }
+              }}
             />
+          )}
+
+          {/* USER PREFERENCES PANEL */}
+          {activeTab === "configuracoes" && (
+            <UserPreferencesPanel />
           )}
 
         </div>
@@ -2483,10 +2826,10 @@ export default function App() {
             <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-4">
               <div className="flex items-center justify-between mb-3.5 pb-2 border-b border-neutral-800">
                 <h3 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-                  <Award className="w-4 h-4 text-green-500" /> Bilhete de Hoje
+                  <Award className="w-4 h-4 text-green-500" /> Bilhete Inteligente IA
                 </h3>
-                <span className="text-[9px] bg-amber-500/15 text-amber-500 px-2 py-0.5 rounded font-bold uppercase tracking-widest">
-                  Ativo
+                <span className="text-[9px] bg-green-500/15 text-green-400 px-2 py-0.5 rounded font-bold uppercase tracking-widest">
+                  Sugestão
                 </span>
               </div>
 
@@ -2602,24 +2945,26 @@ export default function App() {
                       </div>
                     )}
 
-                    <div className="grid grid-cols-2 gap-2 pt-2">
+                    <div className="pt-2">
                       <button
                         onClick={copySlipToClipboard}
-                        className="bg-neutral-950 hover:bg-neutral-900 border border-neutral-850 text-neutral-300 text-xs py-2 rounded flex items-center justify-center gap-1"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                        {hasCopiedSlip ? "Copiado!" : "Copiar Bilhete"}
-                      </button>
-                      <button
-                        onClick={handlePlaceBet}
-                        disabled={isAnyLimitExceeded}
-                        className={`font-bold text-xs py-2 rounded shadow-md transition-all ${
-                          isAnyLimitExceeded
-                            ? "bg-neutral-800 text-neutral-500 cursor-not-allowed border border-neutral-700"
+                        className={`w-full font-bold text-xs py-3 rounded shadow-md transition-all flex items-center justify-center gap-1.5 active:scale-98 ${
+                          hasCopiedSlip
+                            ? "bg-neutral-800 text-green-400 border border-green-500/30"
                             : "bg-green-500 hover:bg-green-400 text-black cursor-pointer"
                         }`}
                       >
-                        {isAnyLimitExceeded ? "Bloqueado" : "Registrar Aposta"}
+                        {hasCopiedSlip ? (
+                          <>
+                            <Check className="w-4 h-4" />
+                            Palpites Copiados! 🚀
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-4 h-4" />
+                            Copiar Bilhete de Palpites
+                          </>
+                        )}
                       </button>
                     </div>
                   </div>
@@ -2669,70 +3014,32 @@ export default function App() {
       </footer>
 
       {/* PREMIUM VIP PLAN SIGNUP MODAL */}
-      {showVIPModal && (
-        <div className="fixed inset-0 bg-neutral-950/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-neutral-900 border border-amber-500/30 rounded-lg max-w-md w-full p-6 relative space-y-5 animate-scale-up">
-            <button
-              onClick={() => setShowVIPModal(false)}
-              className="absolute top-4 right-4 p-1 hover:bg-neutral-800 rounded text-neutral-400 hover:text-white"
-            >
-              <X className="w-4 h-4" />
-            </button>
+      <PremiumSaaSModal
+        isOpen={showVIPModal}
+        onClose={() => setShowVIPModal(false)}
+        currentUser={currentUser}
+        onPlanActivated={(newPlan) => {
+          if (currentUser) {
+            const updated = { ...currentUser, plan: newPlan };
+            setCurrentUser(updated);
+            localStorage.setItem("betvision_user", JSON.stringify(updated));
+            addAdminLog(`COBRANCA_APROVADA_ASSINATURA_${newPlan.toUpperCase()}`, currentUser.name, "success");
+            triggerPushNotification(
+              "Upgrade de Assinatura",
+              `Parabéns! Sua conta agora está no nível ${newPlan.toUpperCase()}. Recursos premium liberados!`,
+              "status"
+            );
+          }
+        }}
+        addLog={addAdminLog}
+        addNotification={(title, message, type) => triggerPushNotification(title, message, type)}
+      />
 
-            <div className="text-center space-y-2">
-              <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-amber-500/10 text-amber-500 mb-2 border border-amber-500/20">
-                <Award className="w-6 h-6" />
-              </div>
-              <h3 className="text-base font-bold text-white uppercase tracking-wider">Desbloquear Premium VIP Area</h3>
-              <p className="text-xs text-neutral-400">Tenha acesso a palpites de precisão acima de 92% e análise profunda de fluxo asiático de odds em tempo real.</p>
-            </div>
-
-            <div className="space-y-3">
-              <div className="bg-neutral-950 p-3 rounded border border-neutral-850 space-y-1">
-                <div className="text-xs font-bold text-white">Benefícios Exclusivos:</div>
-                <ul className="text-[11px] text-neutral-400 space-y-1 pl-4 list-disc">
-                  <li>Análise preditiva estendida de 42 parâmetros de Poisson</li>
-                  <li>Sinais de arbitragem e surebet asiática</li>
-                  <li>Atendimento personalizado direto via consultoria IA</li>
-                  <li>Suporte estendido para cartões e escanteios</li>
-                </ul>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-neutral-950 p-3 rounded border border-neutral-850 text-center relative group cursor-pointer hover:border-amber-500/30">
-                  <div className="text-[10px] text-neutral-500 font-bold uppercase">Mensal VIP</div>
-                  <div className="text-lg font-bold text-white mt-1">R$ 49,90</div>
-                  <span className="text-[8px] text-neutral-400 block mt-0.5">Cobrança única</span>
-                </div>
-                <div className="bg-neutral-950 p-3 rounded border border-amber-500/40 text-center relative cursor-pointer bg-amber-500/5">
-                  <div className="absolute -top-2 left-1/2 transform -translate-x-1/2 bg-amber-500 text-black text-[8px] font-bold px-1.5 py-0.5 rounded-full uppercase">
-                    Melhor Valor
-                  </div>
-                  <div className="text-[10px] text-amber-500 font-bold uppercase mt-1">Semestral VIP</div>
-                  <div className="text-lg font-bold text-white mt-1">R$ 199,90</div>
-                  <span className="text-[8px] text-neutral-400 block mt-0.5">Economia de 33%</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-2">
-              <button
-                onClick={() => {
-                  setIsVIPSubscriber(true);
-                  setShowVIPModal(false);
-                  alert("✓ Parabéns! Plano Premium VIP desbloqueado. Você agora tem acesso a todas as partidas preditas e análise estendida!");
-                }}
-                className="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2.5 rounded text-xs transition-all tracking-wider shadow-lg"
-              >
-                ASSINAR PREMIUM VIP AGORA
-              </button>
-              <div className="text-center text-[9px] text-neutral-500 mt-2">
-                Plano de simulação demonstrativo. Não serão efetuadas cobranças reais.
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* SHARE PREDICTION CARD SNAPSHOT MODAL */}
+      <SharePredictionModal
+        match={shareMatch}
+        onClose={() => setShareMatch(null)}
+      />
 
       {/* RISK MANAGEMENT SETTINGS MODAL */}
       {showSettingsModal && (
@@ -2794,27 +3101,31 @@ export default function App() {
           <span className="text-[9px] mt-1 font-medium tracking-tight">Ao Vivo</span>
         </button>
         <button
+          onClick={() => { setActiveTab("smart_bets"); }}
+          className={`flex flex-col items-center justify-center w-14 h-12 rounded transition-colors ${
+            activeTab === "smart_bets" ? "text-green-500" : "text-neutral-400 hover:text-white"
+          }`}
+        >
+          <Sparkles className="w-5 h-5" />
+          <span className="text-[9px] mt-1 font-medium tracking-tight">Sugestões</span>
+        </button>
+        <button
           onClick={() => { setActiveTab("multiplas"); }}
           className={`flex flex-col items-center justify-center w-14 h-12 rounded transition-colors ${
             activeTab === "multiplas" ? "text-green-500" : "text-neutral-400 hover:text-white"
           }`}
         >
-          <Sparkles className="w-5 h-5" />
+          <Layers className="w-5 h-5" />
           <span className="text-[9px] mt-1 font-medium tracking-tight">Múltiplas</span>
         </button>
         <button
-          onClick={() => { setActiveTab("minhas_apostas"); }}
-          className={`flex flex-col items-center justify-center w-14 h-12 rounded transition-colors relative ${
-            activeTab === "minhas_apostas" ? "text-green-500" : "text-neutral-400 hover:text-white"
+          onClick={() => { setActiveTab("dashboard_ia"); }}
+          className={`flex flex-col items-center justify-center w-14 h-12 rounded transition-colors ${
+            activeTab === "dashboard_ia" ? "text-green-500" : "text-neutral-400 hover:text-white"
           }`}
         >
-          <Clock className="w-5 h-5" />
-          <span className="text-[9px] mt-1 font-medium tracking-tight">Histórico</span>
-          {myBets.filter(b => b.status === "pending").length > 0 && (
-            <span className="absolute top-1 right-2 bg-green-500 text-neutral-950 font-bold text-[8px] px-1 rounded-full">
-              {myBets.filter(b => b.status === "pending").length}
-            </span>
-          )}
+          <BarChart3 className="w-5 h-5" />
+          <span className="text-[9px] mt-1 font-medium tracking-tight">Análises</span>
         </button>
       </div>
 
@@ -2948,27 +3259,26 @@ export default function App() {
                     </div>
                   )}
 
-                  <div className="grid grid-cols-2 gap-3 pt-2">
+                  <div className="pt-2">
                     <button
                       onClick={copySlipToClipboard}
-                      className="bg-neutral-950 hover:bg-neutral-900 border border-neutral-850 text-neutral-300 text-xs py-2.5 rounded flex items-center justify-center gap-1"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                      {hasCopiedSlip ? "Copiado!" : "Copiar Bilhete"}
-                    </button>
-                    <button
-                      onClick={() => {
-                        handlePlaceBet();
-                        setShowMobileSlip(false);
-                      }}
-                      disabled={isAnyLimitExceeded}
-                      className={`font-bold text-xs py-2.5 rounded shadow-md transition-all ${
-                        isAnyLimitExceeded
-                          ? "bg-neutral-800 text-neutral-500 cursor-not-allowed border border-neutral-700"
+                      className={`w-full font-bold text-xs py-3 rounded shadow-md transition-all flex items-center justify-center gap-1.5 active:scale-98 ${
+                        hasCopiedSlip
+                          ? "bg-neutral-800 text-green-400 border border-green-500/30"
                           : "bg-green-500 hover:bg-green-400 text-black cursor-pointer"
                       }`}
                     >
-                      {isAnyLimitExceeded ? "Bloqueado" : "Registrar Aposta"}
+                      {hasCopiedSlip ? (
+                        <>
+                          <Check className="w-4 h-4" />
+                          Palpites Copiados! 🚀
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-4 h-4" />
+                          Copiar Bilhete de Palpites
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>

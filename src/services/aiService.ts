@@ -116,6 +116,22 @@ export class AIService {
     chatHistory: Array<{ sender: "user" | "ai"; text: string }>,
     relevantMatch?: Match
   ): Promise<string> {
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ message: userMessage, chatHistory, relevantMatch })
+      });
+      const data = await response.json();
+      if (data && !data.usingFallback && data.text) {
+        return data.text;
+      }
+    } catch (e) {
+      console.warn("Express proxy API chat error, using expert simulation mode:", e);
+    }
+
     const prompt = userMessage.toLowerCase();
 
     // Check if user is asking about a specific match
@@ -150,5 +166,25 @@ export class AIService {
     }
 
     return `Olá! Sou o especialista tático de IA do BetVision Pro. Posso te ajudar com previsões detalhadas de confrontos, cálculos de Expected Value (EV), sugestões de múltiplas inteligentes ou análises de desfalques. O que você gostaria de analisar hoje?`;
+  }
+
+  // Client-side AI deep predictive rationale fetcher
+  static async getAIAnalysis(match: Match): Promise<string> {
+    try {
+      const response = await fetch("/api/predict", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ match })
+      });
+      const data = await response.json();
+      if (data && !data.usingFallback && data.analysis) {
+        return data.analysis;
+      }
+    } catch (e) {
+      console.warn("Express proxy API predict error, using default analysis:", e);
+    }
+    return match.iaAnalysis;
   }
 }

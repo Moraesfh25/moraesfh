@@ -7,6 +7,7 @@ export interface Match {
   league: string;
   time: string;
   date: string;
+  country?: string; // e.g. "Brasil", "Inglaterra", "Espanha"
   isVIP: boolean;
   isLive: boolean;
   liveMinute?: number;
