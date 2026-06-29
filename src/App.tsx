@@ -11,6 +11,7 @@ import {
   CheckCircle,
   AlertCircle,
   Calendar,
+  MapPin,
   Flame,
   ChevronRight,
   ChevronDown,
@@ -33,44 +34,233 @@ import {
   Check,
   Send,
   Sliders,
-  HelpCircle
+  HelpCircle,
+  Star
 } from "lucide-react";
 
-// Matches Interface
-interface Match {
-  id: string;
-  homeTeam: string;
-  awayTeam: string;
-  league: string;
-  time: string;
-  date: string;
-  isVIP: boolean;
-  isLive: boolean;
-  liveMinute?: number;
-  liveScore?: [number, number];
-  iaConfidence: number; // 0 to 100
-  iaStars: number; // 1 to 5
-  odds: { home: number; draw: number; away: number };
-  probabilities: { home: number; draw: number; away: number };
-  iaMarketSuggestion: string;
-  iaAnalysis: string;
-  attackingStrength: { home: number; away: number };
-  defendingStrength: { home: number; away: number };
-  recentH2H: string;
-  formGuide: { home: string[]; away: string[] };
-}
-
-// Chat message interface
-interface ChatMessage {
-  id: string;
-  sender: "user" | "ai";
-  text: string;
-  timestamp: string;
-}
+import { Match, ChatMessage, BetSlipItem, UserBet, PersonalFilter } from "./types";
+import { SportsService } from "./services/sportsService";
+import { AIService } from "./services/aiService";
+import { MultiplesService } from "./services/multiplesService";
+import DashboardIA from "./pages/DashboardIA";
+import PainelAdmin from "./admin/PainelAdmin";
+import { BankrollManager } from "./components/BankrollManager";
+import { 
+  RiskManagementPanel, 
+  RiskLimits, 
+  RiskLosses 
+} from "./components/RiskManagementPanel";
+import { 
+  NotificationCenter, 
+  PushNotificationToastContainer, 
+  MockNotification, 
+  ActiveToast 
+} from "./components/NotificationCenter";
 
 export default function App() {
   // Navigation tabs: "dashboard" | "partidas" | "simulador" | "multiplas" | "minhas_apostas"
   const [activeTab, setActiveTab] = useState<string>("dashboard");
+
+  // Notifications State
+  const [notifications, setNotifications] = useState<MockNotification[]>(() => {
+    try {
+      const saved = localStorage.getItem("betvision_notifications");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isMuted, setIsMuted] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("betvision_notifications_muted") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [activeToasts, setActiveToasts] = useState<ActiveToast[]>([]);
+
+  // Risk Management State
+  const [riskLimits, setRiskLimits] = useState<RiskLimits>(() => {
+    try {
+      const saved = localStorage.getItem("betvision_risk_limits");
+      return saved ? JSON.parse(saved) : {
+        daily: 500,
+        weekly: 2000,
+        monthly: 5000,
+        enabledDaily: true,
+        enabledWeekly: true,
+        enabledMonthly: true
+      };
+    } catch {
+      return {
+        daily: 500,
+        weekly: 2000,
+        monthly: 5000,
+        enabledDaily: true,
+        enabledWeekly: true,
+        enabledMonthly: true
+      };
+    }
+  });
+
+  const [simulatedLosses, setSimulatedLosses] = useState<RiskLosses>(() => {
+    try {
+      const saved = localStorage.getItem("betvision_risk_sim_losses");
+      return saved ? JSON.parse(saved) : {
+        daily: 0,
+        weekly: 150,
+        monthly: 500
+      };
+    } catch {
+      return {
+        daily: 0,
+        weekly: 150,
+        monthly: 500
+      };
+    }
+  });
+
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+
+  // Persist notifications settings
+  useEffect(() => {
+    try {
+      localStorage.setItem("betvision_notifications", JSON.stringify(notifications));
+    } catch {}
+  }, [notifications]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("betvision_notifications_muted", String(isMuted));
+    } catch {}
+  }, [isMuted]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("betvision_risk_limits", JSON.stringify(riskLimits));
+    } catch {}
+  }, [riskLimits]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("betvision_risk_sim_losses", JSON.stringify(simulatedLosses));
+    } catch {}
+  }, [simulatedLosses]);
+
+  const handleSimulateLoss = (amount: number, period: "daily" | "weekly" | "monthly") => {
+    setSimulatedLosses((prev) => ({
+      ...prev,
+      [period]: parseFloat((prev[period] + amount).toFixed(2))
+    }));
+  };
+
+  const handleResetSimulatedLosses = () => {
+    setSimulatedLosses({
+      daily: 0,
+      weekly: 0,
+      monthly: 0
+    });
+  };
+
+  const playNotificationSound = () => {
+    if (isMuted) return;
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1); // A5
+      
+      gain.gain.setValueAtTime(0.08, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      osc.start();
+      osc.stop(ctx.currentTime + 0.4);
+    } catch (err) {
+      console.warn("Audio Context blocked or not supported", err);
+    }
+  };
+
+  const triggerPushNotification = (
+    title: string,
+    message: string,
+    type: "goal" | "probability" | "status" | "info"
+  ) => {
+    const id = "notif_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5);
+    const timestamp = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    
+    const newNotif: MockNotification = {
+      id,
+      title,
+      message,
+      type,
+      timestamp,
+      read: false
+    };
+
+    setNotifications((prev) => [newNotif, ...prev].slice(0, 50)); // Keep last 50
+    
+    const newToast: ActiveToast = {
+      id,
+      title,
+      message,
+      type,
+      timestamp
+    };
+
+    setActiveToasts((prev) => [...prev, newToast]);
+    playNotificationSound();
+
+    // Auto close toast after 5 seconds
+    setTimeout(() => {
+      setActiveToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 5000);
+  };
+
+  const handleTestNotification = (type: "goal" | "probability" | "status" | "info") => {
+    if (type === "goal") {
+      triggerPushNotification(
+        "⚽ GOL DO FLAMENGO!",
+        "Flamengo 2 x 1 River Plate. Probabilidade de vitória do Flamengo saltou para 87%. Análise IA atualizada!",
+        "goal"
+      );
+    } else if (type === "probability") {
+      triggerPushNotification(
+        "📈 OSCILAÇÃO TÁTICA IA",
+        "Arsenal x Liverpool: Pressão ofensiva do Arsenal aumentou em 15%. Probabilidade de gols (Over 2.5) subiu para 89%.",
+        "probability"
+      );
+    } else if (type === "status") {
+      triggerPushNotification(
+        "⏱️ PARTIDA INICIADA",
+        "Real Madrid x Barcelona: O clássico começou! Acompanhe as estatísticas táticas e os palpites dinâmicos da IA.",
+        "status"
+      );
+    } else {
+      triggerPushNotification(
+        "💡 OPORTUNIDADE DE VALOR",
+        "Dica Pro: Man City x Chelsea aos 72'. A odd para Vitória do Man City está em 1.95, com valor esperado positivo (+12.4% EV).",
+        "info"
+      );
+    }
+  };
+
+  const handleClearAllNotifications = () => {
+    setNotifications([]);
+  };
+
+  const handleToggleMute = () => {
+    setIsMuted((prev) => !prev);
+  };
+
+  const handleRemoveNotification = (id: string) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  };
 
   // VIP Subscription state
   const [isVIPSubscriber, setIsVIPSubscriber] = useState<boolean>(false);
@@ -81,8 +271,62 @@ export default function App() {
   const [activeFilter, setActiveFilter] = useState<string>("high_confidence");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
+  // Personal Filters State & Actions
+  const [personalFilters, setPersonalFilters] = useState<PersonalFilter[]>(() => {
+    try {
+      const saved = localStorage.getItem("betvision_personal_filters");
+      return saved ? JSON.parse(saved) : [
+        { id: "default-1", name: "Premier + Alta Confiança", league: "Premier League", filter: "high_confidence" },
+        { id: "default-2", name: "Brasileirão + Over Gols", league: "Brasileirão", filter: "over_gols" }
+      ];
+    } catch {
+      return [];
+    }
+  });
+
+  const [newFilterName, setNewFilterName] = useState<string>("");
+
+  useEffect(() => {
+    localStorage.setItem("betvision_personal_filters", JSON.stringify(personalFilters));
+  }, [personalFilters]);
+
+  const handleSavePersonalFilter = () => {
+    const nameToUse = newFilterName.trim();
+    if (!nameToUse) return;
+    
+    const newFilter: PersonalFilter = {
+      id: `filter-${Date.now()}`,
+      name: nameToUse,
+      league: selectedLeague,
+      filter: activeFilter
+    };
+    
+    setPersonalFilters((prev) => [...prev, newFilter]);
+    setNewFilterName("");
+  };
+
+  const handleRemovePersonalFilter = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setPersonalFilters((prev) => prev.filter((f) => f.id !== id));
+  };
+
+  const getFilterCombinationLabel = (f: PersonalFilter) => {
+    const leagueLabel = f.league === "all" ? "Todos" : f.league;
+    const filterLabelsMap: Record<string, string> = {
+      high_confidence: "Alta Confiança",
+      favorites: "Favoritos",
+      over_gols: "Over Gols",
+      btts: "Ambas Marcam",
+      vip: "VIP"
+    };
+    const filterLabel = filterLabelsMap[f.filter] || f.filter;
+    return `${leagueLabel} • ${filterLabel}`;
+  };
+
+
   // Active Selected Match for deep analysis drawer
   const [selectedMatch, setSelectedMatch] = useState<Match | null>(null);
+  const [selectedMatchTab, setSelectedMatchTab] = useState<"analise" | "estatisticas" | "ficha">("analise");
 
   // Bet Slip (Bilhete do Dia)
   const [betSlip, setBetSlip] = useState<Array<{ match: Match; selection: "home" | "draw" | "away"; odd: number }>>([
@@ -130,6 +374,9 @@ export default function App() {
   // Balance
   const [userBalance, setUserBalance] = useState<number>(2450.0);
 
+  // Mobile UI States
+  const [showMobileSlip, setShowMobileSlip] = useState<boolean>(false);
+
   // ROI Calculator interactive state
   const [simulatedInvestment, setSimulatedInvestment] = useState<number>(500);
 
@@ -166,166 +413,226 @@ export default function App() {
       status: "won",
       date: "Ontem"
     }
-  ]);
+  ]);  // Initial Matches Data from SportsService
 
-  // Initial Matches Data
-  const [matches, setMatches] = useState<Match[]>([
-    {
-      id: "m1",
-      homeTeam: "Arsenal",
-      awayTeam: "Liverpool",
-      league: "Premier League",
-      time: "16:00",
-      date: "Hoje",
-      isVIP: false,
-      isLive: false,
-      iaConfidence: 94,
-      iaStars: 5,
-      odds: { home: 1.55, draw: 4.20, away: 5.10 },
-      probabilities: { home: 58, draw: 24, away: 18 },
-      iaMarketSuggestion: "Over 2.5 Gols",
-      iaAnalysis: "Arsenal exhibits highly cohesive attacking transitions at home, scoring 2.4 goals per match on average. Liverpool's center-back pairing is vulnerable due to a key recent injury to Konaté, presenting a 78% probability of over 2.5 match goals.",
-      attackingStrength: { home: 92, away: 86 },
-      defendingStrength: { home: 88, away: 82 },
-      recentH2H: "Arsenal 3-1 Liverpool (Feb 2026), Liverpool 1-1 Arsenal (Dec 2025)",
-      formGuide: { home: ["W", "W", "D", "W", "L"], away: ["W", "D", "W", "L", "W"] }
-    },
-    {
-      id: "m2",
-      homeTeam: "Flamengo",
-      awayTeam: "River Plate",
-      league: "Libertadores",
-      time: "21:00",
-      date: "Hoje",
-      isVIP: true,
-      isLive: false,
-      iaConfidence: 89,
-      iaStars: 5,
-      odds: { home: 1.80, draw: 3.50, away: 4.40 },
-      probabilities: { home: 61, draw: 22, away: 17 },
-      iaMarketSuggestion: "Vitória Mandante",
-      iaAnalysis: "Flamengo maintains a strong domestic record at Maracanã (unbeaten in 14 matches). River Plate struggles to maintain high-tempo defensive pressure when playing away, having conceded in 5 of their last 6 away continental matches.",
-      attackingStrength: { home: 90, away: 78 },
-      defendingStrength: { home: 85, away: 80 },
-      recentH2H: "Flamengo 2-1 River Plate (Nov 2024), River Plate 1-1 Flamengo (May 2024)",
-      formGuide: { home: ["W", "W", "W", "D", "W"], away: ["D", "W", "L", "D", "W"] }
-    },
-    {
-      id: "m3",
-      homeTeam: "Real Madrid",
-      awayTeam: "Barcelona",
-      league: "La Liga",
-      time: "LIVE",
-      date: "Hoje",
-      isVIP: false,
-      isLive: true,
-      liveMinute: 72,
-      liveScore: [1, 1],
-      iaConfidence: 85,
-      iaStars: 4,
-      odds: { home: 2.10, draw: 3.10, away: 3.60 },
-      probabilities: { home: 42, draw: 31, away: 27 },
-      iaMarketSuggestion: "Barcelona +1.5 Gols (Live)",
-      iaAnalysis: "El Clásico has entered an intense physical phase in the final 20 minutes. Barcelona is executing counter-pressing with high efficiency, exploiting tired Madrid wingers. Expect a late goal or tight finish.",
-      attackingStrength: { home: 95, away: 94 },
-      defendingStrength: { home: 79, away: 81 },
-      recentH2H: "Real Madrid 3-2 Barcelona (Apr 2026), Barcelona 1-2 Real Madrid (Oct 2025)",
-      formGuide: { home: ["W", "L", "W", "W", "W"], away: ["W", "W", "W", "D", "W"] }
-    },
-    {
-      id: "m4",
-      homeTeam: "Manchester City",
-      awayTeam: "Chelsea",
-      league: "Premier League",
-      time: "18:30",
-      date: "Amanhã",
-      isVIP: false,
-      isLive: false,
-      iaConfidence: 92,
-      iaStars: 5,
-      odds: { home: 1.40, draw: 4.80, away: 7.00 },
-      probabilities: { home: 68, draw: 20, away: 12 },
-      iaMarketSuggestion: "Man City & Over 1.5 Gols",
-      iaAnalysis: "Manchester City displays an excellent home game control index (66% average possession). Chelsea's transitions are rapid but prone to structural breakdown under elite defensive counter-pressing.",
-      attackingStrength: { home: 96, away: 79 },
-      defendingStrength: { home: 91, away: 72 },
-      recentH2H: "Chelsea 1-1 City (Feb 2026), City 2-1 Chelsea (Nov 2025)",
-      formGuide: { home: ["W", "W", "D", "W", "W"], away: ["D", "W", "L", "W", "L"] }
-    },
-    {
-      id: "m5",
-      homeTeam: "São Paulo",
-      awayTeam: "Palmeiras",
-      league: "Brasileirão",
-      time: "16:00",
-      date: "Amanhã",
-      isVIP: false,
-      isLive: false,
-      iaConfidence: 78,
-      iaStars: 4,
-      odds: { home: 2.60, draw: 3.10, away: 2.80 },
-      probabilities: { home: 35, draw: 38, away: 27 },
-      iaMarketSuggestion: "Menos de 2.5 Gols",
-      iaAnalysis: "A highly defensive derby Choque-Rei. Both sides deploy tight double pivots to block final-third penetration. 4 of their last 5 clashes resulted in 2 goals or fewer.",
-      attackingStrength: { home: 81, away: 83 },
-      defendingStrength: { home: 85, away: 88 },
-      recentH2H: "Palmeiras 1-0 São Paulo (Jan 2026), São Paulo 1-1 Palmeiras (Oct 2025)",
-      formGuide: { home: ["D", "W", "D", "L", "W"], away: ["W", "W", "D", "W", "D"] }
-    },
-    {
-      id: "m6",
-      homeTeam: "Bayern Munich",
-      awayTeam: "Borussia Dortmund",
-      league: "Champions League",
-      time: "20:00",
-      date: "Quarta",
-      isVIP: true,
-      isLive: false,
-      iaConfidence: 91,
-      iaStars: 5,
-      odds: { home: 1.45, draw: 4.50, away: 6.00 },
-      probabilities: { home: 64, draw: 21, away: 15 },
-      iaMarketSuggestion: "Ambas Marcam (BTTS)",
-      iaAnalysis: "Der Klassiker always yields stellar attacking output. Bayern scoring run is active at 21 direct matches, while Dortmund averages 2.3 goals on away European nights this year.",
-      attackingStrength: { home: 94, away: 88 },
-      defendingStrength: { home: 80, away: 76 },
-      recentH2H: "Bayern 4-2 Dortmund (Apr 2026), Dortmund 2-3 Bayern (Nov 2025)",
-      formGuide: { home: ["W", "W", "W", "W", "D"], away: ["W", "D", "W", "L", "W"] }
+  // Calculated losses from myBets where status === "lost"
+  const getActualLostAmount = (period: "daily" | "weekly" | "monthly") => {
+    return myBets
+      .filter((b) => b.status === "lost")
+      .reduce((acc, b) => {
+        if (period === "daily") {
+          const isToday = b.date.includes("Hoje") || b.date.includes("Agora");
+          return isToday ? acc + b.amount : acc;
+        }
+        return acc + b.amount;
+      }, 0);
+  };
+
+  const totalDailyLoss = simulatedLosses.daily + getActualLostAmount("daily");
+  const totalWeeklyLoss = simulatedLosses.weekly + getActualLostAmount("weekly");
+  const totalMonthlyLoss = simulatedLosses.monthly + getActualLostAmount("monthly");
+
+  const actualLosses: RiskLosses = {
+    daily: totalDailyLoss,
+    weekly: totalWeeklyLoss,
+    monthly: totalMonthlyLoss
+  };
+
+  const isDailyExceeded = riskLimits.enabledDaily && totalDailyLoss >= riskLimits.daily;
+  const isWeeklyExceeded = riskLimits.enabledWeekly && totalWeeklyLoss >= riskLimits.weekly;
+  const isMonthlyExceeded = riskLimits.enabledMonthly && totalMonthlyLoss >= riskLimits.monthly;
+  const isAnyLimitExceeded = isDailyExceeded || isWeeklyExceeded || isMonthlyExceeded;
+
+  const isDailyNearLimit = riskLimits.enabledDaily && totalDailyLoss >= riskLimits.daily * 0.8 && totalDailyLoss < riskLimits.daily;
+  const isWeeklyNearLimit = riskLimits.enabledWeekly && totalWeeklyLoss >= riskLimits.weekly * 0.8 && totalWeeklyLoss < riskLimits.weekly;
+  const isMonthlyNearLimit = riskLimits.enabledMonthly && totalMonthlyLoss >= riskLimits.monthly * 0.8 && totalMonthlyLoss < riskLimits.monthly;
+  const isAnyLimitNearLimit = isDailyNearLimit || isWeeklyNearLimit || isMonthlyNearLimit;
+
+  const lastAlertsRef = useRef<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const checkLimits = () => {
+      const checks = [
+        {
+          key: "daily_80",
+          enabled: riskLimits.enabledDaily,
+          loss: totalDailyLoss,
+          limit: riskLimits.daily,
+          title: "⚠️ ALERTA DE GESTÃO DE RISCO",
+          message: `Você atingiu R$ ${totalDailyLoss.toFixed(2)} (${Math.round((totalDailyLoss / (riskLimits.daily || 1)) * 100)}%) de perdas diárias. Limite: R$ ${riskLimits.daily}. Controle sua banca!`,
+          level: 0.8
+        },
+        {
+          key: "daily_100",
+          enabled: riskLimits.enabledDaily,
+          loss: totalDailyLoss,
+          limit: riskLimits.daily,
+          title: "🛑 BLOQUEIO DE GESTÃO DE RISCO",
+          message: `Você atingiu seu limite diário de perdas de R$ ${riskLimits.daily}. Novas apostas estão bloqueadas para sua segurança.`,
+          level: 1.0
+        },
+        {
+          key: "weekly_80",
+          enabled: riskLimits.enabledWeekly,
+          loss: totalWeeklyLoss,
+          limit: riskLimits.weekly,
+          title: "⚠️ ALERTA DE GESTÃO DE RISCO",
+          message: `Suas perdas semanais atingiram R$ ${totalWeeklyLoss.toFixed(2)} (${Math.round((totalWeeklyLoss / (riskLimits.weekly || 1)) * 100)}%) do limite de R$ ${riskLimits.weekly}.`,
+          level: 0.8
+        },
+        {
+          key: "weekly_100",
+          enabled: riskLimits.enabledWeekly,
+          loss: totalWeeklyLoss,
+          limit: riskLimits.weekly,
+          title: "🛑 BLOQUEIO DE GESTÃO DE RISCO",
+          message: `Você atingiu seu limite semanal de perdas de R$ ${riskLimits.weekly}. Novas apostas estão bloqueadas para sua segurança.`,
+          level: 1.0
+        },
+        {
+          key: "monthly_80",
+          enabled: riskLimits.enabledMonthly,
+          loss: totalMonthlyLoss,
+          limit: riskLimits.monthly,
+          title: "⚠️ ALERTA DE GESTÃO DE RISCO",
+          message: `Suas perdas mensais atingiram R$ ${totalMonthlyLoss.toFixed(2)} (${Math.round((totalMonthlyLoss / (riskLimits.monthly || 1)) * 100)}%) do limite de R$ ${riskLimits.monthly}.`,
+          level: 0.8
+        },
+        {
+          key: "monthly_100",
+          enabled: riskLimits.enabledMonthly,
+          loss: totalMonthlyLoss,
+          limit: riskLimits.monthly,
+          title: "🛑 BLOQUEIO DE GESTÃO DE RISCO",
+          message: `Você atingiu seu limite mensal de perdas de R$ ${riskLimits.monthly}. Novas apostas estão bloqueadas para sua segurança.`,
+          level: 1.0
+        }
+      ];
+
+      checks.forEach((c) => {
+        if (!c.enabled || c.limit <= 0) return;
+        
+        const thresholdMet = c.loss >= c.limit * c.level;
+        const alreadyAlerted = lastAlertsRef.current[c.key];
+
+        if (thresholdMet && !alreadyAlerted) {
+          triggerPushNotification(c.title, c.message, c.level === 1.0 ? "status" : "probability");
+          lastAlertsRef.current[c.key] = true;
+        } else if (!thresholdMet && alreadyAlerted) {
+          lastAlertsRef.current[c.key] = false;
+        }
+      });
+    };
+
+    checkLimits();
+  }, [totalDailyLoss, totalWeeklyLoss, totalMonthlyLoss, riskLimits]);
+
+  const [matches, setMatches] = useState<Match[]>(() => SportsService.getMatches());
+
+  const prevMatchesRef = useRef<Match[]>([]);
+
+  // Monitor favorite matches for live goals, status changes, and probability shifts
+  useEffect(() => {
+    if (prevMatchesRef.current.length === 0) {
+      prevMatchesRef.current = matches;
+      return;
     }
-  ]);
 
-  // Real-time live match ticker simulation
+    matches.forEach((newMatch) => {
+      const prevMatch = prevMatchesRef.current.find((m) => m.id === newMatch.id);
+      if (!prevMatch) return;
+
+      // Only alert if the match is favorited
+      if (newMatch.isFavorite) {
+        // 1. Goal Scored check
+        if (prevMatch.liveScore && newMatch.liveScore) {
+          const homeGoalScored = newMatch.liveScore[0] > prevMatch.liveScore[0];
+          const awayGoalScored = newMatch.liveScore[1] > prevMatch.liveScore[1];
+
+          if (homeGoalScored) {
+            triggerPushNotification(
+              `⚽ GOL! ${newMatch.homeTeam.toUpperCase()}`,
+              `${newMatch.homeTeam} marcou contra o ${newMatch.awayTeam}! Placar atual: ${newMatch.liveScore[0]} - ${newMatch.liveScore[1]}. A probabilidade de vitória subiu para ${newMatch.probabilities.home}%.`,
+              "goal"
+            );
+          } else if (awayGoalScored) {
+            triggerPushNotification(
+              `⚽ GOL! ${newMatch.awayTeam.toUpperCase()}`,
+              `${newMatch.awayTeam} marcou contra o ${newMatch.homeTeam}! Placar atual: ${newMatch.liveScore[0]} - ${newMatch.liveScore[1]}. A probabilidade de vitória subiu para ${newMatch.probabilities.away}%.`,
+              "goal"
+            );
+          }
+        }
+
+        // 2. Status check: Game ended
+        if (prevMatch.isLive && !newMatch.isLive && newMatch.time === "Fim") {
+          triggerPushNotification(
+            "⏱️ FIM DE JOGO!",
+            `Partida encerrada: ${newMatch.homeTeam} ${newMatch.liveScore?.[0]} x ${newMatch.liveScore?.[1]} ${newMatch.awayTeam}. Todos os mercados de apostas foram liquidados!`,
+            "status"
+          );
+        }
+
+        // 3. Significant live probability shift (>= 7%) without goal
+        const scoreChanged = prevMatch.liveScore && newMatch.liveScore &&
+          (prevMatch.liveScore[0] !== newMatch.liveScore[0] || prevMatch.liveScore[1] !== newMatch.liveScore[1]);
+        
+        if (!scoreChanged) {
+          const homeShift = Math.abs((newMatch.probabilities?.home ?? 0) - (prevMatch.probabilities?.home ?? 0));
+          const drawShift = Math.abs((newMatch.probabilities?.draw ?? 0) - (prevMatch.probabilities?.draw ?? 0));
+          const awayShift = Math.abs((newMatch.probabilities?.away ?? 0) - (prevMatch.probabilities?.away ?? 0));
+
+          if (homeShift >= 7 || drawShift >= 7 || awayShift >= 7) {
+            let leadingTeam = "";
+            let pVal = 0;
+            if (newMatch.probabilities.home > newMatch.probabilities.away) {
+              leadingTeam = newMatch.homeTeam;
+              pVal = newMatch.probabilities.home;
+            } else {
+              leadingTeam = newMatch.awayTeam;
+              pVal = newMatch.probabilities.away;
+            }
+            triggerPushNotification(
+              "📊 RADAR IA: OSCILAÇÃO TÁTICA",
+              `Oscilação de probabilidade aos ${newMatch.liveMinute}' de ${newMatch.homeTeam} x ${newMatch.awayTeam}. A IA recalculou a chance de vitória do ${leadingTeam} para ${pVal}%.`,
+              "probability"
+            );
+          }
+        }
+      }
+    });
+
+    prevMatchesRef.current = matches;
+  }, [matches]);
+
+  const toggleFavorite = (matchId: string) => {
+    let isFavNow = false;
+    let matchName = "";
+    const updated = matches.map((m) => {
+      if (m.id === matchId) {
+        isFavNow = !m.isFavorite;
+        matchName = `${m.homeTeam} x ${m.awayTeam}`;
+        return { ...m, isFavorite: isFavNow };
+      }
+      return m;
+    });
+    setMatches(updated);
+    SportsService.saveMatches(updated);
+
+    if (isFavNow) {
+      triggerPushNotification(
+        "⭐ PARTIDA FAVORITADA",
+        `Você começou a monitorar ${matchName}. Você receberá alertas de gols, status e variações táticas de probabilidade!`,
+        "info"
+      );
+    }
+  };
+
+  // Real-time live match ticker simulation using SportsService
   useEffect(() => {
     const interval = setInterval(() => {
-      setMatches((prevMatches) => {
-        return prevMatches.map((match) => {
-          if (match.isLive) {
-            const currentMin = match.liveMinute || 72;
-            const newMin = currentMin >= 90 ? 90 : currentMin + 1;
-            let currentScore = match.liveScore || [1, 1];
-            
-            // Periodically simulate live goal!
-            if (newMin === 79 && currentScore[0] === 1 && currentScore[1] === 1) {
-              currentScore = [2, 1]; // Real Madrid scores
-            } else if (newMin === 88 && currentScore[0] === 2 && currentScore[1] === 1) {
-              // High impact event alert or change probabilities
-            }
-
-            // Fluctuating odds based on match time and goals
-            const homeOdds = newMin > 80 ? (currentScore[0] > currentScore[1] ? 1.25 : 4.50) : 1.95;
-            const drawOdds = newMin > 80 ? (currentScore[0] === currentScore[1] ? 1.80 : 5.50) : 2.80;
-            const awayOdds = newMin > 80 ? (currentScore[0] < currentScore[1] ? 1.35 : 12.0) : 4.10;
-
-            return {
-              ...match,
-              liveMinute: newMin,
-              liveScore: currentScore,
-              odds: { home: parseFloat(homeOdds.toFixed(2)), draw: parseFloat(drawOdds.toFixed(2)), away: parseFloat(awayOdds.toFixed(2)) }
-            };
-          }
-          return match;
-        });
-      });
+      const updated = SportsService.tickLiveGames();
+      setMatches(updated);
     }, 10000); // Ticks every 10 seconds for real feel
 
     return () => clearInterval(interval);
@@ -349,7 +656,7 @@ export default function App() {
       return match.iaConfidence >= 88;
     }
     if (activeFilter === "favorites") {
-      return match.odds.home < 1.60;
+      return match.isFavorite || match.odds.home < 1.60;
     }
     if (activeFilter === "over_gols") {
       return match.iaMarketSuggestion.includes("Over") || match.iaMarketSuggestion.includes("Gols");
@@ -387,6 +694,21 @@ export default function App() {
   // Handle Bet placement
   const handlePlaceBet = () => {
     if (betSlip.length === 0) return;
+    
+    // Check risk limits
+    if (riskLimits.enabledDaily && totalDailyLoss >= riskLimits.daily) {
+      alert(`🛑 Aposta Bloqueada: Limite Diário de Perdas Excedido (R$ ${riskLimits.daily.toFixed(2)}). Visite o painel de Gestão de Risco para redefinir.`);
+      return;
+    }
+    if (riskLimits.enabledWeekly && totalWeeklyLoss >= riskLimits.weekly) {
+      alert(`🛑 Aposta Bloqueada: Limite Semanal de Perdas Excedido (R$ ${riskLimits.weekly.toFixed(2)}). Visite o painel de Gestão de Risco para redefinir.`);
+      return;
+    }
+    if (riskLimits.enabledMonthly && totalMonthlyLoss >= riskLimits.monthly) {
+      alert(`🛑 Aposta Bloqueada: Limite Mensal de Perdas Excedido (R$ ${riskLimits.monthly.toFixed(2)}). Visite o painel de Gestão de Risco para redefinir.`);
+      return;
+    }
+
     if (userBalance < betAmount) {
       alert("Saldo insuficiente para realizar esta aposta.");
       return;
@@ -417,6 +739,31 @@ export default function App() {
     alert("✓ Aposta registrada com sucesso pelo Motor de IA!");
   };
 
+  const handleSettleBet = (betId: string, status: "won" | "lost") => {
+    setMyBets((prevBets) => 
+      prevBets.map((b) => {
+        if (b.id === betId) {
+          if (status === "won") {
+            setUserBalance((prev) => parseFloat((prev + b.potentialPayout).toFixed(2)));
+            triggerPushNotification(
+              "🏆 BILHETE GANHO!",
+              `Seu bilhete ${b.id} foi liquidado como GANHO! R$ ${b.potentialPayout.toFixed(2)} adicionados ao seu saldo.`,
+              "status"
+            );
+          } else {
+            triggerPushNotification(
+              "💔 BILHETE PERDIDO",
+              `Seu bilhete ${b.id} foi liquidado como PERDIDO. R$ ${b.amount.toFixed(2)} contabilizados como perda.`,
+              "status"
+            );
+          }
+          return { ...b, status };
+        }
+        return b;
+      })
+    );
+  };
+
   // Copy Ticket Hash Code
   const copySlipToClipboard = () => {
     const codes = ["BV-8821X-PRO", "BV-9901A-MAX", "BV-2139P-VIP", "BV-3342E-SLIP"];
@@ -427,7 +774,7 @@ export default function App() {
     });
   };
 
-  // Multi slip generator simulation
+  // Multi slip generator simulation using MultiplesService
   const triggerMultiGenerator = () => {
     setIsGenerating(true);
     setGenProgressText("Consultando base de dados Futebolística...");
@@ -442,35 +789,57 @@ export default function App() {
           setGenProgressText("Gerando Bilhete de Alta Confiabilidade...");
           
           setTimeout(() => {
-            // Generate mock results
-            let gamesGenerated: any[] = [];
-            if (genRiskLevel === "conservative") {
-              gamesGenerated = [
-                { match: "Arsenal x Liverpool", market: "Over 1.5 Gols", odd: 1.25, confidence: 96 },
-                { match: "Man City x Chelsea", market: "Vitória Man City (DNB)", odd: 1.18, confidence: 94 },
-                { match: "Bayern Munich x Dortmund", market: "Over 2.5 Gols", odd: 1.35, confidence: 92 }
-              ];
-            } else if (genRiskLevel === "moderate") {
-              gamesGenerated = [
-                { match: "Arsenal x Liverpool", market: "Over 2.5 Gols", odd: 1.55, confidence: 94 },
-                { match: "Man City x Chelsea", market: "Vitória Mandante", odd: 1.40, confidence: 92 },
-                { match: "São Paulo x Palmeiras", market: "Menos de 2.5 Gols", odd: 1.50, confidence: 85 }
-              ];
-            } else {
-              gamesGenerated = [
-                { match: "Flamengo x River Plate", market: "Vitória Flamengo & Ambos Marcam", odd: 3.40, confidence: 81 },
-                { match: "Real Madrid x Barcelona", market: "Empate técnico", odd: 3.20, confidence: 75 },
-                { match: "Bayern Munich x Dortmund", market: "Bayern Munich ganha & Ambos Marcam", odd: 2.70, confidence: 79 }
-              ];
-            }
+            try {
+              const multiple = MultiplesService.generateMultiple({
+                gamesCount: genGamesCount,
+                riskLevel: genRiskLevel,
+                marketType: genMarketType
+              });
 
-            const combinedOdds = parseFloat(gamesGenerated.reduce((acc, curr) => acc * curr.odd, 1).toFixed(2));
-            setGeneratedSlipResult({
-              odds: combinedOdds,
-              risk: genRiskLevel.toUpperCase(),
-              games: gamesGenerated,
-              hash: "BV-" + Math.floor(100000 + Math.random() * 900000)
-            });
+              const gamesFormatted = multiple.matches.map((match) => {
+                let selection: "home" | "draw" | "away" = "home";
+                let odd = match.odds.home;
+                const mSuggestion = match.iaMarketSuggestion || "Over 1.5 Gols";
+
+                if (genMarketType === "vencedor") {
+                  selection = match.probabilities.home >= match.probabilities.away ? "home" : "away";
+                  odd = selection === "home" ? match.odds.home : match.odds.away;
+                } else if (genMarketType === "gols") {
+                  if (mSuggestion.toLowerCase().includes("gols") || mSuggestion.toLowerCase().includes("under") || mSuggestion.toLowerCase().includes("over")) {
+                    const res = MultiplesService.getMarketOddBySuggestion(match, mSuggestion);
+                    selection = res.selection;
+                    odd = res.odd;
+                  } else {
+                    selection = "draw";
+                    odd = 1.85;
+                  }
+                } else {
+                  // Misto
+                  const res = MultiplesService.getMarketOddBySuggestion(match, mSuggestion);
+                  selection = res.selection;
+                  odd = res.odd;
+                }
+
+                return {
+                  match: `${match.homeTeam} x ${match.awayTeam}`,
+                  market: mSuggestion,
+                  odd: odd,
+                  confidence: match.iaConfidence,
+                  matchRef: match,
+                  selection,
+                };
+              });
+
+              setGeneratedSlipResult({
+                odds: multiple.oddTotal,
+                risk: genRiskLevel.toUpperCase(),
+                games: gamesFormatted,
+                hash: multiple.id,
+                explanation: multiple.explanation
+              });
+            } catch (err) {
+              console.error("Error generating multiples", err);
+            }
             setIsGenerating(false);
           }, 800);
         }, 800);
@@ -480,24 +849,29 @@ export default function App() {
 
   const addGeneratedToSlip = () => {
     if (!generatedSlipResult) return;
-    // Map items from generator to bets list or add to slip directly if mapping found
-    alert("✓ Jogos gerados pela IA integrados ao seu Bilhete Principal!");
     
-    // Convert first item as example
-    const matchRef = matches[0]; // Arsenal
-    addToBetSlip(matchRef, "home", matchRef.odds.home);
+    // Clean and transfer all selected matches with their precise AI selections to the main slip
+    const itemsToAdd = generatedSlipResult.games.map((g: any) => ({
+      match: g.matchRef,
+      selection: g.selection,
+      odd: g.odd
+    }));
+
+    setBetSlip(itemsToAdd);
     setGeneratedSlipResult(null);
+    alert("✓ Todos os palpites gerados pela IA integrados ao seu Bilhete Principal!");
   };
 
-  // AI Chat Consultant triggers simulated responses
+  // AI Chat Consultant triggers simulated responses using AIService
   const sendChatMessage = () => {
     if (!userChatInput.trim() || !selectedMatch) return;
 
+    const query = userChatInput;
     const userMsgId = "msg_" + Date.now();
     const newMsg: ChatMessage = {
       id: userMsgId,
       sender: "user",
-      text: userChatInput,
+      text: query,
       timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })
     };
 
@@ -512,18 +886,10 @@ export default function App() {
     setUserChatInput("");
     setIsChatTyping(true);
 
-    // Dynamic AI feedback depending on keyword
-    setTimeout(() => {
-      let aiResponseText = `Excelente pergunta! Analisando o confronto entre ${selectedMatch.homeTeam} e ${selectedMatch.awayTeam}, nosso algoritmo quantitativo observa que o fluxo de apostas globais está concentrado no mercado de ${selectedMatch.iaMarketSuggestion}.`;
-      
-      const query = userChatInput.toLowerCase();
-      if (query.includes("gol") || query.includes("gols") || query.includes("over") || query.includes("under")) {
-        aiResponseText = `Para gols, nosso índice aponta um ataque mandante de ${selectedMatch.attackingStrength.home}% contra defesa visitante de ${selectedMatch.defendingStrength.away}%. Isso sugere alta propensão para ataques verticais rápidos. Nossa sugestão ideal continua sendo ${selectedMatch.iaMarketSuggestion}.`;
-      } else if (query.includes("vencedor") || query.includes("ganha") || query.includes("favorito")) {
-        aiResponseText = `A probabilidade real calculada é de: Vitória ${selectedMatch.homeTeam} (${selectedMatch.probabilities.home}%), Empate (${selectedMatch.probabilities.draw}%), Vitória ${selectedMatch.awayTeam} (${selectedMatch.probabilities.away}%). O valor matemático está na odd de ${selectedMatch.odds.home} para o Mandante.`;
-      } else if (query.includes("vip") || query.includes("premium")) {
-        aiResponseText = "Nossos modelos preditivos VIP realizam cross-reference de até 42 variáveis em tempo real (incluindo clima, biometria de atletas e fluxo asiático de odds).";
-      }
+    // Dynamic AI feedback using the business logic AIService layer
+    setTimeout(async () => {
+      const historyFormatted = currentMessages.map(m => ({ sender: m.sender, text: m.text }));
+      const aiResponseText = await AIService.getAIConsultantResponse(query, historyFormatted, selectedMatch);
 
       const aiMsg: ChatMessage = {
         id: "msg_ai_" + Date.now(),
@@ -537,7 +903,7 @@ export default function App() {
         [matchId]: [...(prev[matchId] || []), aiMsg]
       }));
       setIsChatTyping(false);
-    }, 1500);
+    }, 1200);
   };
 
   // Simulate manual event for live match
@@ -548,11 +914,29 @@ export default function App() {
           const currentScore = match.liveScore || [1, 1];
           const updatedScore: [number, number] = [currentScore[0], currentScore[1] + 1]; // Barcelona scores!
           alert(`⚡ GOL DO BARCELONA! O placar agora é Real Madrid ${updatedScore[0]} x ${updatedScore[1]} Barcelona!`);
+          
+          const currentStats = match.stats || {
+            possession: [50, 50],
+            corners: [4, 3],
+            yellowCards: [1, 2],
+            redCards: [0, 0],
+            shotsOnTarget: [6, 4],
+            shotsOffTarget: [5, 3],
+            xg: [1.45, 0.98]
+          };
+
+          const nextStats = {
+            ...currentStats,
+            shotsOnTarget: [currentStats.shotsOnTarget[0], currentStats.shotsOnTarget[1] + 1] as [number, number],
+            xg: [currentStats.xg[0], parseFloat((currentStats.xg[1] + 0.75).toFixed(2))] as [number, number]
+          };
+
           return {
             ...match,
             liveScore: updatedScore,
             iaMarketSuggestion: "Over 3.5 Gols em alta",
-            probabilities: { home: 25, draw: 35, away: 40 }
+            probabilities: { home: 25, draw: 35, away: 40 },
+            stats: nextStats
           };
         }
         return match;
@@ -560,19 +944,39 @@ export default function App() {
     });
   };
 
+  const renderStatBar = (label: string, homeVal: number, awayVal: number, isFloat: boolean = false) => {
+    const total = homeVal + awayVal || 1;
+    const homePercent = (homeVal / total) * 100;
+    const awayPercent = (awayVal / total) * 100;
+    
+    return (
+      <div className="space-y-1">
+        <div className="flex justify-between items-center text-[10px] font-mono text-neutral-300">
+          <span className="font-semibold text-green-400">{isFloat ? homeVal.toFixed(2) : homeVal}</span>
+          <span className="text-[9px] uppercase font-sans text-neutral-450 tracking-wider font-semibold">{label}</span>
+          <span className="font-semibold text-red-400">{isFloat ? awayVal.toFixed(2) : awayVal}</span>
+        </div>
+        <div className="w-full bg-neutral-950 h-1.5 rounded-full overflow-hidden flex border border-neutral-850">
+          <div className="bg-green-500 h-full transition-all duration-500" style={{ width: `${homePercent}%` }}></div>
+          <div className="bg-red-500 h-full transition-all duration-500" style={{ width: `${awayPercent}%` }}></div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col h-screen w-full bg-neutral-950 text-neutral-200 font-sans overflow-hidden">
       
       {/* TOP NAVIGATION BAR */}
-      <header className="h-14 border-b border-neutral-800 bg-neutral-900 flex items-center justify-between px-6 shrink-0 z-20">
-        <div className="flex items-center gap-8">
+      <header className="h-14 border-b border-neutral-800 bg-neutral-900 flex items-center justify-between px-4 md:px-6 shrink-0 z-20">
+        <div className="flex items-center gap-4 md:gap-8">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-green-500 rounded flex items-center justify-center font-bold text-black text-sm">BV</div>
-            <span className="text-xl font-bold tracking-tighter text-white">
+            <div className="w-8 h-8 bg-green-500 rounded flex items-center justify-center font-bold text-black text-sm shrink-0">BV</div>
+            <span className="text-base sm:text-xl font-bold tracking-tighter text-white">
               BETVISION<span className="text-green-500">PRO</span>
             </span>
           </div>
-          <nav className="flex gap-4 text-xs font-medium">
+          <nav className="hidden lg:flex gap-4 text-xs font-medium">
             <button
               onClick={() => { setActiveTab("dashboard"); setSelectedLeague("all"); }}
               className={`px-3 py-1.5 rounded transition-all ${
@@ -616,10 +1020,26 @@ export default function App() {
                 {myBets.filter(b => b.status === "pending").length}
               </span>
             </button>
+            <button
+              onClick={() => { setActiveTab("dashboard_ia"); }}
+              className={`px-3 py-1.5 rounded transition-all ${
+                activeTab === "dashboard_ia" ? "bg-green-500 text-black font-semibold" : "text-neutral-400 hover:text-white"
+              }`}
+            >
+              Estatísticas IA
+            </button>
+            <button
+              onClick={() => { setActiveTab("admin"); }}
+              className={`px-3 py-1.5 rounded transition-all flex items-center gap-1 text-red-400 hover:text-red-350 border border-neutral-800 hover:border-red-500/20 ${
+                activeTab === "admin" ? "bg-red-500 text-white font-semibold" : ""
+              }`}
+            >
+              <Sliders className="w-3.5 h-3.5" /> Admin
+            </button>
           </nav>
         </div>
         
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4">
           <button
             onClick={() => {
               if (isVIPSubscriber) {
@@ -628,17 +1048,27 @@ export default function App() {
                 setShowVIPModal(true);
               }
             }}
-            className={`px-3 py-1 rounded text-xs font-semibold flex items-center gap-1.5 transition-all ${
+            className={`px-2 py-1 rounded text-[10px] sm:text-xs font-semibold flex items-center gap-1 transition-all ${
               isVIPSubscriber
                 ? "bg-amber-500 text-black border border-amber-600 shadow-md animate-pulse"
                 : "bg-neutral-800 text-amber-400 border border-neutral-700 hover:bg-neutral-700"
             }`}
           >
-            ★ {isVIPSubscriber ? "VIP ATIVO" : "Upgrade VIP"}
+            ★ <span className="hidden sm:inline">{isVIPSubscriber ? "VIP ATIVO" : "Upgrade VIP"}</span>
+            <span className="sm:hidden">{isVIPSubscriber ? "VIP" : "UP"}</span>
           </button>
           
-          <div className="bg-neutral-800 px-3 py-1.5 rounded text-xs border border-neutral-700 flex items-center gap-2">
-            <span className="text-neutral-400">Saldo:</span>
+          <NotificationCenter
+            notifications={notifications}
+            isMuted={isMuted}
+            onClearAll={handleClearAllNotifications}
+            onToggleMute={handleToggleMute}
+            onRemoveNotification={handleRemoveNotification}
+            onTestNotification={handleTestNotification}
+          />
+          
+          <div className="bg-neutral-800 px-2 sm:px-3 py-1 sm:py-1.5 rounded text-[10px] sm:text-xs border border-neutral-700 flex items-center gap-1.5 sm:gap-2">
+            <span className="text-neutral-400 hidden sm:inline">Saldo:</span>
             <span className="text-green-400 font-mono font-bold">R$ {userBalance.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span>
             <button
               onClick={() => {
@@ -648,22 +1078,35 @@ export default function App() {
               title="Recarregar Saldo de Demonstração"
               className="p-0.5 hover:bg-neutral-700 rounded text-neutral-400 hover:text-white"
             >
-              <RotateCcw className="w-3.5 h-3.5" />
+              <RotateCcw className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
             </button>
           </div>
           
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-green-600 to-emerald-400 flex items-center justify-center font-bold text-neutral-950 text-xs">
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="flex items-center gap-1.5 px-2 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 hover:border-red-500/30 rounded text-xs transition-colors cursor-pointer font-bold"
+            title="Gestão de Risco de Perdas"
+          >
+            <Sliders className="w-3.5 h-3.5" />
+            <span className="hidden md:inline">Gestão de Risco</span>
+          </button>
+
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="w-8 h-8 rounded-full bg-gradient-to-tr from-green-600 to-emerald-400 hidden sm:flex items-center justify-center font-bold text-neutral-950 text-xs shrink-0 hover:ring-2 hover:ring-green-400 transition-all cursor-pointer"
+            title="Configurações do Perfil e Gestão de Risco"
+          >
             FP
-          </div>
+          </button>
         </div>
       </header>
 
       {/* MAIN INTERFACE */}
       <main className="flex flex-1 overflow-hidden">
         
-        {/* SIDEBAR FILTERS (Only visible on dashboard and matches list) */}
+        {/* SIDEBAR FILTERS (Only visible on dashboard and matches list) - HIDDEN ON MOBILE/TABLET */}
         {(activeTab === "dashboard" || activeTab === "partidas") && (
-          <aside className="w-56 border-r border-neutral-800 bg-neutral-900/40 p-4 flex flex-col shrink-0">
+          <aside className="hidden md:flex w-56 border-r border-neutral-800 bg-neutral-900/40 p-4 flex-col shrink-0 overflow-y-auto max-h-[calc(100vh-4rem)]">
             <div className="mb-6">
               <h3 className="text-[10px] uppercase tracking-widest text-neutral-500 font-bold mb-3 flex items-center gap-1">
                 <Filter className="w-3 h-3 text-green-500" /> Filtros IA
@@ -781,6 +1224,79 @@ export default function App() {
               </div>
             </div>
 
+            {/* Filtros Pessoais */}
+            <div className="mb-6">
+              <h3 className="text-[10px] uppercase tracking-widest text-neutral-500 font-bold mb-3 flex items-center gap-1">
+                <Star className="w-3.5 h-3.5 text-yellow-500" /> Filtros Pessoais
+              </h3>
+              
+              <div className="space-y-2 mb-3">
+                {personalFilters.map((f) => {
+                  const isActive = selectedLeague === f.league && activeFilter === f.filter;
+                  return (
+                    <div
+                      key={f.id}
+                      onClick={() => {
+                        setSelectedLeague(f.league);
+                        setActiveFilter(f.filter);
+                      }}
+                      className={`group w-full text-left px-2.5 py-1.5 rounded text-xs transition-all flex items-center justify-between cursor-pointer border ${
+                        isActive
+                          ? "bg-green-500/10 border-green-500/30 text-green-400 font-medium"
+                          : "bg-neutral-900/40 border-neutral-850 text-neutral-400 hover:text-neutral-200 hover:border-neutral-800"
+                      }`}
+                    >
+                      <div className="truncate min-w-0 pr-1">
+                        <span className="font-semibold block truncate leading-tight text-[11px] group-hover:text-neutral-100 transition-colors">
+                          {f.name}
+                        </span>
+                        <span className="text-[9px] font-mono opacity-60 block truncate mt-0.5">
+                          {getFilterCombinationLabel(f)}
+                        </span>
+                      </div>
+                      <button
+                        onClick={(e) => handleRemovePersonalFilter(f.id, e)}
+                        className="text-neutral-500 hover:text-red-400 p-1 rounded hover:bg-neutral-800 shrink-0 transition-all opacity-0 group-hover:opacity-100 focus:opacity-100"
+                        title="Excluir filtro"
+                      >
+                        <Trash className="w-3 h-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+                
+                {personalFilters.length === 0 && (
+                  <p className="text-[10px] text-neutral-500 italic px-1 py-1">
+                    Nenhum atalho salvo. Crie um combinando filtros acima!
+                  </p>
+                )}
+              </div>
+
+              {/* Form to save current */}
+              <div className="bg-neutral-900/50 p-2.5 rounded border border-neutral-850 space-y-2">
+                <div className="text-[9px] font-mono text-neutral-400 leading-tight">
+                  Salvar atual: <span className="text-neutral-200">{getFilterCombinationLabel({ id: "", name: "", league: selectedLeague, filter: activeFilter })}</span>
+                </div>
+                <div className="flex gap-1">
+                  <input
+                    type="text"
+                    placeholder="Ex: Premier + VIP"
+                    value={newFilterName}
+                    onChange={(e) => setNewFilterName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSavePersonalFilter()}
+                    className="bg-neutral-950 border border-neutral-800 rounded px-2 py-1 text-[10px] text-neutral-200 focus:outline-none focus:border-green-500 flex-1"
+                  />
+                  <button
+                    onClick={handleSavePersonalFilter}
+                    disabled={!newFilterName.trim()}
+                    className="bg-green-500 hover:bg-green-400 disabled:bg-neutral-800 disabled:text-neutral-500 text-black px-2 py-1 rounded text-[10px] font-bold transition-all shrink-0 flex items-center justify-center"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* Quick Interactive ROI Tool */}
             <div className="mt-auto bg-neutral-900/60 border border-neutral-800 rounded p-3 text-xs">
               <h4 className="font-bold text-neutral-300 mb-1 flex items-center gap-1">
@@ -809,11 +1325,156 @@ export default function App() {
         )}
 
         {/* CONTENT VIEWPORT */}
-        <div className="flex-1 flex flex-col min-w-0 bg-neutral-950 overflow-y-auto">
+        <div className="flex-1 flex flex-col min-w-0 bg-neutral-950 overflow-y-auto pb-16 md:pb-0">
           
           {/* DASHBOARD TAB VIEW */}
           {activeTab === "dashboard" && (
             <div className="p-4 space-y-4">
+              
+              {/* MOBILE HORIZONTAL FILTERS & LEAGUES (hidden on desktop) */}
+              <div className="md:hidden space-y-3 pb-3 border-b border-neutral-900">
+                {/* Filters IA */}
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold flex items-center gap-1">
+                    <Filter className="w-2.5 h-2.5 text-green-500" /> Filtros IA
+                  </span>
+                  <div className="flex gap-1.5 overflow-x-auto py-0.5 scrollbar-none">
+                    <button
+                      onClick={() => setActiveFilter("high_confidence")}
+                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border ${
+                        activeFilter === "high_confidence"
+                          ? "bg-green-500 text-black border-green-500 font-bold"
+                          : "bg-neutral-900 text-neutral-400 border-neutral-800"
+                      }`}
+                    >
+                      Maior Confiança
+                    </button>
+                    <button
+                      onClick={() => setActiveFilter("favorites")}
+                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border ${
+                        activeFilter === "favorites"
+                          ? "bg-green-500 text-black border-green-500 font-bold"
+                          : "bg-neutral-900 text-neutral-400 border-neutral-800"
+                      }`}
+                    >
+                      Favoritos
+                    </button>
+                    <button
+                      onClick={() => setActiveFilter("over_gols")}
+                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border ${
+                        activeFilter === "over_gols"
+                          ? "bg-green-500 text-black border-green-500 font-bold"
+                          : "bg-neutral-900 text-neutral-400 border-neutral-800"
+                      }`}
+                    >
+                      Over Gols
+                    </button>
+                    <button
+                      onClick={() => setActiveFilter("btts")}
+                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border ${
+                        activeFilter === "btts"
+                          ? "bg-green-500 text-black border-green-500 font-bold"
+                          : "bg-neutral-900 text-neutral-400 border-neutral-800"
+                      }`}
+                    >
+                      Ambas Marcam
+                    </button>
+                    <button
+                      onClick={() => setActiveFilter("vip")}
+                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border ${
+                        activeFilter === "vip"
+                          ? "bg-amber-500 text-black border-amber-500 font-bold"
+                          : "bg-neutral-900 text-neutral-400 border-neutral-800"
+                      }`}
+                    >
+                      ★ VIP Exclusivo
+                    </button>
+                  </div>
+                </div>
+
+                {/* Filtros Pessoais Mobile */}
+                {personalFilters.length > 0 && (
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold flex items-center gap-1">
+                      <Star className="w-2.5 h-2.5 text-yellow-500" /> Filtros Pessoais
+                    </span>
+                    <div className="flex gap-1.5 overflow-x-auto py-0.5 scrollbar-none">
+                      {personalFilters.map((f) => {
+                        const isActive = selectedLeague === f.league && activeFilter === f.filter;
+                        return (
+                          <button
+                            key={f.id}
+                            onClick={() => {
+                              setSelectedLeague(f.league);
+                              setActiveFilter(f.filter);
+                            }}
+                            className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border flex items-center gap-1.5 ${
+                              isActive
+                                ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/30 font-bold"
+                                : "bg-neutral-900 text-neutral-400 border-neutral-800"
+                            }`}
+                          >
+                            <span>{f.name}</span>
+                            <span className="text-[8px] opacity-65 font-mono">({getFilterCombinationLabel(f)})</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Campeonatos */}
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold flex items-center gap-1">
+                    <Award className="w-2.5 h-2.5 text-amber-500" /> Campeonatos
+                  </span>
+                  <div className="flex gap-1.5 overflow-x-auto py-0.5 scrollbar-none">
+                    {[
+                      { id: "all", name: "Todos" },
+                      { id: "Brasileirão", name: "Brasileirão" },
+                      { id: "Premier League", name: "Premier League" },
+                      { id: "Libertadores", name: "Libertadores", vip: true },
+                      { id: "La Liga", name: "La Liga", live: true },
+                    ].map((league) => (
+                      <button
+                        key={league.id}
+                        onClick={() => setSelectedLeague(league.id)}
+                        className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border flex items-center gap-1 ${
+                          selectedLeague === league.id
+                            ? "bg-neutral-200 text-neutral-950 border-neutral-200 font-bold"
+                            : "bg-neutral-900 text-neutral-400 border-neutral-800"
+                        }`}
+                      >
+                        {league.name}
+                        {league.vip && <span className="text-[8px] bg-amber-500/10 text-amber-400 px-1 rounded font-bold">VIP</span>}
+                        {league.live && <span className="text-[8px] bg-red-500/10 text-red-500 px-1 rounded font-bold animate-pulse">LIVE</span>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Mini ROI Simulator Tool for Mobile */}
+                <div className="bg-neutral-900/40 border border-neutral-850 rounded-lg p-3 text-[11px] space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <span className="font-bold text-neutral-300 flex items-center gap-1">
+                      <TrendingUp className="w-3 h-3 text-green-500" /> Simulador de ROI
+                    </span>
+                    <span className="text-[10px] text-green-400 font-bold font-mono">Retorno 30d: +R$ {Math.round(simulatedInvestment * 0.242)}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min="100"
+                      max="5000"
+                      step="100"
+                      value={simulatedInvestment}
+                      onChange={(e) => setSimulatedInvestment(parseInt(e.target.value))}
+                      className="flex-1 h-1 bg-neutral-750 rounded-lg appearance-none cursor-pointer accent-green-500"
+                    />
+                    <span className="text-[10px] text-white font-mono shrink-0">Aporte: R$ {simulatedInvestment}</span>
+                  </div>
+                </div>
+              </div>
               
               {/* STATS STRIP */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -955,12 +1616,24 @@ export default function App() {
                             {/* Left part: Teams & Header */}
                             <div className="w-full md:w-1/4 shrink-0 border-b md:border-b-0 md:border-r border-neutral-800 pb-3 md:pb-0 md:pr-4 flex flex-col justify-between">
                               <div>
-                                <div className="text-[9px] text-neutral-400 font-mono flex items-center gap-1.5 mb-2">
-                                  <span>{match.league}</span>
-                                  <span>•</span>
-                                  <span className={match.isLive ? "text-green-500 font-bold animate-pulse" : ""}>
-                                    {match.isLive ? `LIVE ${match.liveMinute}'` : `${match.date}, ${match.time}`}
-                                  </span>
+                                <div className="text-[9px] text-neutral-400 font-mono flex items-center justify-between gap-1.5 mb-2">
+                                  <div className="flex items-center gap-1.5">
+                                    <span>{match.league}</span>
+                                    <span>•</span>
+                                    <span className={match.isLive ? "text-green-500 font-bold animate-pulse" : ""}>
+                                      {match.isLive ? `LIVE ${match.liveMinute}'` : `${match.date}, ${match.time}`}
+                                    </span>
+                                  </div>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleFavorite(match.id);
+                                    }}
+                                    className="text-neutral-500 hover:text-amber-400 p-1 transition-colors relative z-20"
+                                    title={match.isFavorite ? "Remover dos Favoritos" : "Adicionar aos Favoritos"}
+                                  >
+                                    <Star className={`w-3.5 h-3.5 ${match.isFavorite ? "fill-amber-400 text-amber-400" : ""}`} />
+                                  </button>
                                 </div>
                                 <div className="space-y-1.5">
                                   <div className="flex items-center justify-between font-bold text-xs text-white">
@@ -1053,128 +1726,280 @@ export default function App() {
                   </div>
 
                   {/* Deep Analysis Side Panel / Drawer */}
-                  {selectedMatch && (
-                    <div className="w-full xl:w-80 bg-neutral-900 border border-neutral-800 rounded-lg p-4 flex flex-col shrink-0 space-y-4">
-                      <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
-                        <div>
-                          <h3 className="font-bold text-xs text-white">Consul de Análise Preditiva</h3>
-                          <span className="text-[10px] text-neutral-400 font-mono">
-                            {selectedMatch.homeTeam} x {selectedMatch.awayTeam}
-                          </span>
-                        </div>
-                        <button
-                          onClick={() => setSelectedMatch(null)}
-                          className="p-1 hover:bg-neutral-800 rounded text-neutral-400 hover:text-white"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </div>
+                  {(() => {
+                    const activeMatchDetails = selectedMatch ? matches.find(m => m.id === selectedMatch.id) || selectedMatch : null;
+                    if (!activeMatchDetails) return null;
 
-                      {/* Visual Attacking/Defending indicators */}
-                      <div className="space-y-3">
-                        <h4 className="text-[10px] uppercase text-neutral-400 font-bold tracking-wider">Métricas Comparativas</h4>
-                        <div className="space-y-2">
+                    return (
+                      <div className="w-full xl:w-80 bg-neutral-900 border border-neutral-800 rounded-lg p-4 flex flex-col shrink-0 space-y-4">
+                        <div className="flex items-center justify-between pb-1 border-b border-neutral-800">
                           <div>
-                            <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
-                              <span>Força Ofensiva ({selectedMatch.homeTeam})</span>
-                              <span className="font-mono text-green-400">{selectedMatch.attackingStrength.home}%</span>
-                            </div>
-                            <div className="w-full bg-neutral-800 h-1 rounded-full overflow-hidden">
-                              <div className="bg-green-500 h-full" style={{ width: `${selectedMatch.attackingStrength.home}%` }}></div>
-                            </div>
+                            <h3 className="font-bold text-xs text-white">Análise Preditiva & Live</h3>
+                            <span className="text-[10px] text-neutral-400 font-mono">
+                              {activeMatchDetails.homeTeam} x {activeMatchDetails.awayTeam}
+                            </span>
                           </div>
-
-                          <div>
-                            <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
-                              <span>Força Ofensiva ({selectedMatch.awayTeam})</span>
-                              <span className="font-mono text-red-400">{selectedMatch.attackingStrength.away}%</span>
-                            </div>
-                            <div className="w-full bg-neutral-800 h-1 rounded-full overflow-hidden">
-                              <div className="bg-red-500 h-full" style={{ width: `${selectedMatch.attackingStrength.away}%` }}></div>
-                            </div>
-                          </div>
-
-                          <div>
-                            <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
-                              <span>Compactação Defensiva</span>
-                              <span className="font-mono text-white">
-                                {selectedMatch.defendingStrength.home} vs {selectedMatch.defendingStrength.away}
-                              </span>
-                            </div>
-                            <div className="w-full bg-neutral-800 h-1 rounded-full overflow-hidden flex">
-                              <div className="bg-green-500 h-full" style={{ width: "50%" }}></div>
-                              <div className="bg-neutral-700 w-0.5 h-full"></div>
-                              <div className="bg-amber-500 h-full" style={{ width: "50%" }}></div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* AI Expert Text rationale */}
-                      <div className="bg-neutral-950 p-3 rounded border border-neutral-850 text-xs">
-                        <div className="flex items-center gap-1 text-green-400 font-semibold mb-1 text-[11px]">
-                          <Sparkles className="w-3 h-3" /> Parecer do Analista Pro IA:
-                        </div>
-                        <p className="text-neutral-300 leading-relaxed text-[11px] italic">
-                          "{selectedMatch.iaAnalysis}"
-                        </p>
-                      </div>
-
-                      {/* Real-time Interactive AI Consultation Chat */}
-                      <div className="space-y-2 border-t border-neutral-800 pt-3">
-                        <h4 className="text-[10px] uppercase text-neutral-400 font-bold tracking-wider flex items-center gap-1">
-                          <HelpCircle className="w-3 h-3 text-green-500" /> Pergunte à Inteligência Artificial
-                        </h4>
-                        
-                        {/* Chat history wrapper */}
-                        <div className="h-32 bg-neutral-950 rounded p-2 overflow-y-auto space-y-2 border border-neutral-850">
-                          {(!chatMessages[selectedMatch.id] || chatMessages[selectedMatch.id].length === 0) ? (
-                            <p className="text-[10px] text-neutral-500 text-center italic mt-6">
-                              "Arsenal vai manter a baliza intransponível?" ou "Aposta ideal para cantos?" Pergunte abaixo.
-                            </p>
-                          ) : (
-                            chatMessages[selectedMatch.id].map((msg) => (
-                              <div key={msg.id} className={`flex flex-col ${msg.sender === "user" ? "items-end" : "items-start"}`}>
-                                <div className={`max-w-[85%] rounded p-2 text-[10px] ${
-                                  msg.sender === "user" ? "bg-green-500 text-black font-medium" : "bg-neutral-800 text-neutral-200"
-                                }`}>
-                                  {msg.text}
-                                </div>
-                                <span className="text-[8px] text-neutral-500 mt-0.5 px-1 font-mono">{msg.timestamp}</span>
-                              </div>
-                            ))
-                          )}
-                          {isChatTyping && (
-                            <div className="flex items-center gap-1.5 text-neutral-500 text-[9px] pl-1">
-                              <span className="h-1.5 w-1.5 bg-green-500 rounded-full animate-bounce"></span>
-                              <span className="h-1.5 w-1.5 bg-green-500 rounded-full animate-bounce [animation-delay:0.2s]"></span>
-                              <span className="h-1.5 w-1.5 bg-green-500 rounded-full animate-bounce [animation-delay:0.4s]"></span>
-                              <span>IA redigindo parecer...</span>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Input bar */}
-                        <div className="flex gap-1.5">
-                          <input
-                            type="text"
-                            placeholder="Perguntar sobre H2H, gols, desfalques..."
-                            value={userChatInput}
-                            onChange={(e) => setUserChatInput(e.target.value)}
-                            onKeyDown={(e) => e.key === "Enter" && sendChatMessage()}
-                            className="bg-neutral-950 border border-neutral-800 rounded px-2 py-1 text-[11px] text-neutral-200 focus:outline-none focus:border-green-500 flex-1"
-                          />
                           <button
-                            onClick={sendChatMessage}
-                            className="bg-green-500 hover:bg-green-400 text-black p-1.5 rounded transition-colors"
+                            onClick={() => setSelectedMatch(null)}
+                            className="p-1 hover:bg-neutral-800 rounded text-neutral-400 hover:text-white"
                           >
-                            <Send className="w-3.5 h-3.5" />
+                            <X className="w-4 h-4" />
                           </button>
                         </div>
-                      </div>
 
-                    </div>
-                  )}
+                        {/* TABS SELECTOR */}
+                        <div className="grid grid-cols-3 gap-1 bg-neutral-950 p-1 rounded border border-neutral-850 text-[10px] font-semibold shrink-0">
+                          <button
+                            onClick={() => setSelectedMatchTab("analise")}
+                            className={`py-1 rounded text-center transition-all ${
+                              selectedMatchTab === "analise" ? "bg-green-500 text-black font-bold" : "text-neutral-400 hover:text-white"
+                            }`}
+                          >
+                            Análise IA
+                          </button>
+                          <button
+                            onClick={() => setSelectedMatchTab("estatisticas")}
+                            className={`py-1 rounded text-center transition-all ${
+                              selectedMatchTab === "estatisticas" ? "bg-green-500 text-black font-bold" : "text-neutral-400 hover:text-white"
+                            }`}
+                          >
+                            Métricas Ao Vivo
+                          </button>
+                          <button
+                            onClick={() => setSelectedMatchTab("ficha")}
+                            className={`py-1 rounded text-center transition-all ${
+                              selectedMatchTab === "ficha" ? "bg-green-500 text-black font-bold" : "text-neutral-400 hover:text-white"
+                            }`}
+                          >
+                            Ficha & Esc.
+                          </button>
+                        </div>
+
+                        {/* TAB 1: ANALISE */}
+                        {selectedMatchTab === "analise" && (
+                          <div className="flex flex-col space-y-4 flex-1">
+                            {/* Visual Attacking/Defending indicators */}
+                            <div className="space-y-3">
+                              <h4 className="text-[10px] uppercase text-neutral-400 font-bold tracking-wider">Métricas Comparativas</h4>
+                              <div className="space-y-2">
+                                <div>
+                                  <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
+                                    <span>Força Ofensiva ({activeMatchDetails.homeTeam})</span>
+                                    <span className="font-mono text-green-400">{activeMatchDetails.attackingStrength.home}%</span>
+                                  </div>
+                                  <div className="w-full bg-neutral-800 h-1 rounded-full overflow-hidden">
+                                    <div className="bg-green-500 h-full" style={{ width: `${activeMatchDetails.attackingStrength.home}%` }}></div>
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
+                                    <span>Força Ofensiva ({activeMatchDetails.awayTeam})</span>
+                                    <span className="font-mono text-red-400">{activeMatchDetails.attackingStrength.away}%</span>
+                                  </div>
+                                  <div className="w-full bg-neutral-800 h-1 rounded-full overflow-hidden">
+                                    <div className="bg-red-500 h-full" style={{ width: `${activeMatchDetails.attackingStrength.away}%` }}></div>
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
+                                    <span>Compactação Defensiva</span>
+                                    <span className="font-mono text-white">
+                                      {activeMatchDetails.defendingStrength.home} vs {activeMatchDetails.defendingStrength.away}
+                                    </span>
+                                  </div>
+                                  <div className="w-full bg-neutral-800 h-1 rounded-full overflow-hidden flex">
+                                    <div className="bg-green-500 h-full" style={{ width: "50%" }}></div>
+                                    <div className="bg-neutral-700 w-0.5 h-full"></div>
+                                    <div className="bg-amber-500 h-full" style={{ width: "50%" }}></div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* AI Expert Text rationale */}
+                            <div className="bg-neutral-950 p-3 rounded border border-neutral-850 text-xs">
+                              <div className="flex items-center gap-1 text-green-400 font-semibold mb-1 text-[11px]">
+                                <Sparkles className="w-3 h-3" /> Parecer do Analista Pro IA:
+                              </div>
+                              <p className="text-neutral-300 leading-relaxed text-[11px] italic">
+                                "{activeMatchDetails.iaAnalysis}"
+                              </p>
+                            </div>
+
+                            {/* Real-time Interactive AI Consultation Chat */}
+                            <div className="space-y-2 border-t border-neutral-800 pt-3 flex-1 flex flex-col justify-end">
+                              <h4 className="text-[10px] uppercase text-neutral-400 font-bold tracking-wider flex items-center gap-1">
+                                <HelpCircle className="w-3 h-3 text-green-500" /> Pergunte à Inteligência Artificial
+                              </h4>
+                              
+                              {/* Chat history wrapper */}
+                              <div className="h-28 bg-neutral-950 rounded p-2 overflow-y-auto space-y-2 border border-neutral-850">
+                                {(!chatMessages[activeMatchDetails.id] || chatMessages[activeMatchDetails.id].length === 0) ? (
+                                  <p className="text-[10px] text-neutral-500 text-center italic mt-4">
+                                    "Quem tem mais chance de vencer?", "Qual é o mercado ideal?" Pergunte abaixo.
+                                  </p>
+                                ) : (
+                                  chatMessages[activeMatchDetails.id].map((msg) => (
+                                    <div key={msg.id} className={`flex flex-col ${msg.sender === "user" ? "items-end" : "items-start"}`}>
+                                      <div className={`max-w-[85%] rounded p-2 text-[10px] ${
+                                        msg.sender === "user" ? "bg-green-500 text-black font-medium" : "bg-neutral-800 text-neutral-200"
+                                      }`}>
+                                        {msg.text}
+                                      </div>
+                                      <span className="text-[8px] text-neutral-500 mt-0.5 px-1 font-mono">{msg.timestamp}</span>
+                                    </div>
+                                  ))
+                                )}
+                                {isChatTyping && (
+                                  <div className="flex items-center gap-1.5 text-neutral-500 text-[9px] pl-1">
+                                    <span className="h-1.5 w-1.5 bg-green-500 rounded-full animate-bounce"></span>
+                                    <span className="h-1.5 w-1.5 bg-green-500 rounded-full animate-bounce [animation-delay:0.2s]"></span>
+                                    <span className="h-1.5 w-1.5 bg-green-500 rounded-full animate-bounce [animation-delay:0.4s]"></span>
+                                    <span>IA redigindo parecer...</span>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Input bar */}
+                              <div className="flex gap-1.5">
+                                <input
+                                  type="text"
+                                  placeholder="Perguntar sobre H2H, gols, desfalques..."
+                                  value={userChatInput}
+                                  onChange={(e) => setUserChatInput(e.target.value)}
+                                  onKeyDown={(e) => e.key === "Enter" && sendChatMessage()}
+                                  className="bg-neutral-950 border border-neutral-800 rounded px-2 py-1 text-[11px] text-neutral-200 focus:outline-none focus:border-green-500 flex-1"
+                                />
+                                <button
+                                  onClick={sendChatMessage}
+                                  className="bg-green-500 hover:bg-green-400 text-black p-1.5 rounded transition-colors"
+                                >
+                                  <Send className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* TAB 2: ESTATISTICAS */}
+                        {selectedMatchTab === "estatisticas" && (
+                          <div className="flex flex-col space-y-4">
+                            {activeMatchDetails.stats ? (
+                              <div className="space-y-4 bg-neutral-950/40 p-3 rounded-lg border border-neutral-850">
+                                <div className="flex justify-between items-center text-[10px] text-neutral-400 font-bold uppercase tracking-wider border-b border-neutral-800 pb-1 mb-2">
+                                  <span>{activeMatchDetails.homeTeam}</span>
+                                  <span className="text-green-500 font-mono">AO VIVO</span>
+                                  <span>{activeMatchDetails.awayTeam}</span>
+                                </div>
+
+                                {renderStatBar("Posse de Bola", activeMatchDetails.stats.possession[0], activeMatchDetails.stats.possession[1], false)}
+                                {renderStatBar("Expectativa de Gols (xG)", activeMatchDetails.stats.xg[0], activeMatchDetails.stats.xg[1], true)}
+                                {renderStatBar("Finalizações no Alvo", activeMatchDetails.stats.shotsOnTarget[0], activeMatchDetails.stats.shotsOnTarget[1], false)}
+                                {renderStatBar("Finalizações Fora", activeMatchDetails.stats.shotsOffTarget[0], activeMatchDetails.stats.shotsOffTarget[1], false)}
+                                {renderStatBar("Escanteios", activeMatchDetails.stats.corners[0], activeMatchDetails.stats.corners[1], false)}
+                                {renderStatBar("Cartões Amarelos", activeMatchDetails.stats.yellowCards[0], activeMatchDetails.stats.yellowCards[1], false)}
+                                {renderStatBar("Cartões Vermelhos", activeMatchDetails.stats.redCards[0], activeMatchDetails.stats.redCards[1], false)}
+                              </div>
+                            ) : (
+                              <div className="bg-neutral-950/60 p-6 rounded-lg border border-neutral-850 text-center space-y-3">
+                                <Clock className="w-8 h-8 text-neutral-600 mx-auto animate-pulse" />
+                                <p className="text-[11px] text-neutral-400 leading-relaxed">
+                                  Esta partida ainda não iniciou. Estatísticas detalhadas de posse de bola, escanteios, cartões e xG estarão disponíveis em tempo real assim que o jogo começar!
+                                </p>
+                              </div>
+                            )}
+
+                            {/* Small informative prompt */}
+                            <div className="text-[9px] bg-neutral-950 border border-neutral-850 text-neutral-400 p-2.5 rounded italic">
+                              💡 <strong>Dica IA:</strong> No SofaScore, o indicador <strong>xG (Expected Goals)</strong> mede a qualidade das chances criadas. Use isso para apostar em "Próximo Gol" ou "Over" ao vivo!
+                            </div>
+                          </div>
+                        )}
+
+                        {/* TAB 3: FICHA & ESCALACAO */}
+                        {selectedMatchTab === "ficha" && (
+                          <div className="flex flex-col space-y-4 overflow-y-auto max-h-[420px] pr-1">
+                            {/* Stadium and Referee */}
+                            <div className="bg-neutral-950 p-2.5 rounded border border-neutral-850 space-y-2 text-[11px]">
+                              <div className="flex items-center gap-2 text-neutral-300">
+                                <MapPin className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                                <div>
+                                  <span className="text-neutral-500 text-[10px] block leading-none">Estádio / Local</span>
+                                  <span className="font-semibold text-white">{activeMatchDetails.stadium || "Estádio do Mandante"}</span>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 text-neutral-300 border-t border-neutral-900 pt-2">
+                                <User className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                                <div>
+                                  <span className="text-neutral-500 text-[10px] block leading-none">Árbitro Oficial</span>
+                                  <span className="font-semibold text-white">{activeMatchDetails.referee || "Árbitro Licenciado"}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Starting Lineups */}
+                            {activeMatchDetails.lineups ? (
+                              <div className="space-y-2">
+                                <h4 className="text-[10px] uppercase text-neutral-400 font-bold tracking-wider flex items-center gap-1">
+                                  📋 Titulares Prováveis / Escalados
+                                </h4>
+                                <div className="grid grid-cols-2 gap-2 bg-neutral-950 p-2.5 rounded border border-neutral-850">
+                                  <div className="space-y-1">
+                                    <div className="text-[10px] font-bold text-green-400 truncate border-b border-neutral-900 pb-1 mb-1.5">{activeMatchDetails.homeTeam}</div>
+                                    {activeMatchDetails.lineups.home.map((player, idx) => (
+                                      <div key={player} className="text-[10px] text-neutral-300 truncate flex items-center gap-1 font-mono">
+                                        <span className="text-[8px] text-neutral-500 w-3">{idx + 1}</span>
+                                        <span>{player}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <div className="space-y-1 border-l border-neutral-900 pl-2">
+                                    <div className="text-[10px] font-bold text-red-400 truncate border-b border-neutral-900 pb-1 mb-1.5">{activeMatchDetails.awayTeam}</div>
+                                    {activeMatchDetails.lineups.away.map((player, idx) => (
+                                      <div key={player} className="text-[10px] text-neutral-300 truncate flex items-center gap-1 font-mono">
+                                        <span className="text-[8px] text-neutral-500 w-3">{idx + 1}</span>
+                                        <span>{player}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-[10px] text-neutral-500 italic text-center py-2">Sem escalação disponível.</div>
+                            )}
+
+                            {/* Injuries / Suspensions */}
+                            {activeMatchDetails.injuries && (activeMatchDetails.injuries.home.length > 0 || activeMatchDetails.injuries.away.length > 0) ? (
+                              <div className="space-y-2">
+                                <h4 className="text-[10px] uppercase text-red-400 font-bold tracking-wider flex items-center gap-1">
+                                  🚨 Desfalques / Boletim Médico
+                                </h4>
+                                <div className="grid grid-cols-2 gap-2 bg-neutral-950/40 p-2 rounded border border-neutral-850">
+                                  <div className="space-y-1 text-[10px]">
+                                    {activeMatchDetails.injuries.home.map(p => (
+                                      <div key={p} className="text-neutral-400 truncate text-[9px]">❌ {p}</div>
+                                    ))}
+                                    {activeMatchDetails.injuries.home.length === 0 && <span className="text-neutral-600 italic">Nenhum</span>}
+                                  </div>
+                                  <div className="space-y-1 text-[10px] border-l border-neutral-900 pl-2">
+                                    {activeMatchDetails.injuries.away.map(p => (
+                                      <div key={p} className="text-neutral-400 truncate text-[9px]">❌ {p}</div>
+                                    ))}
+                                    {activeMatchDetails.injuries.away.length === 0 && <span className="text-neutral-600 italic">Nenhum</span>}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-[10px] text-neutral-500 italic text-center py-2">Nenhum desfalque importante registrado.</div>
+                            )}
+                          </div>
+                        )}
+
+                      </div>
+                    );
+                  })()}
 
                 </div>
               </div>
@@ -1185,6 +2010,37 @@ export default function App() {
           {/* PARTIDAS PREDITAS FULL LIST TAB VIEW */}
           {activeTab === "partidas" && (
             <div className="p-4 space-y-4">
+              
+              {/* MOBILE HORIZONTAL CAMPEONATOS (hidden on desktop) */}
+              <div className="md:hidden flex flex-col gap-1.5 pb-2 border-b border-neutral-900">
+                <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold flex items-center gap-1">
+                  <Award className="w-2.5 h-2.5 text-amber-500" /> Campeonatos
+                </span>
+                <div className="flex gap-1.5 overflow-x-auto py-0.5 scrollbar-none">
+                  {[
+                    { id: "all", name: "Todos" },
+                    { id: "Brasileirão", name: "Brasileirão" },
+                    { id: "Premier League", name: "Premier League" },
+                    { id: "Libertadores", name: "Libertadores", vip: true },
+                    { id: "La Liga", name: "La Liga", live: true },
+                  ].map((league) => (
+                    <button
+                      key={league.id}
+                      onClick={() => setSelectedLeague(league.id)}
+                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border flex items-center gap-1 ${
+                        selectedLeague === league.id
+                          ? "bg-neutral-200 text-neutral-950 border-neutral-200 font-bold"
+                          : "bg-neutral-900 text-neutral-400 border-neutral-800"
+                      }`}
+                    >
+                      {league.name}
+                      {league.vip && <span className="text-[8px] bg-amber-500/10 text-amber-400 px-1 rounded font-bold">VIP</span>}
+                      {league.live && <span className="text-[8px] bg-red-500/10 text-red-500 px-1 rounded font-bold animate-pulse">LIVE</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-neutral-900">
                 <div>
                   <h2 className="text-sm font-bold text-white uppercase tracking-wider">Centro de Partidas Analisadas</h2>
@@ -1297,9 +2153,18 @@ export default function App() {
                 {matches.filter(m => m.isLive).map(match => (
                   <div key={match.id} className="bg-neutral-900 border border-green-500/30 rounded-lg p-4 space-y-4">
                     <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
-                      <span className="text-xs bg-red-500/10 text-red-500 border border-red-500/20 px-2 py-0.5 rounded font-mono font-bold animate-pulse">
-                        LIVE - MINUTO {match.liveMinute}'
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs bg-red-500/10 text-red-500 border border-red-500/20 px-2 py-0.5 rounded font-mono font-bold animate-pulse">
+                          LIVE - MINUTO {match.liveMinute}'
+                        </span>
+                        <button
+                          onClick={() => toggleFavorite(match.id)}
+                          className="text-neutral-500 hover:text-amber-400 p-1 transition-colors relative z-20"
+                          title={match.isFavorite ? "Remover dos Favoritos" : "Adicionar aos Favoritos"}
+                        >
+                          <Star className={`w-3.5 h-3.5 ${match.isFavorite ? "fill-amber-400 text-amber-400" : ""}`} />
+                        </button>
+                      </div>
                       <span className="text-xs text-neutral-400 font-mono">{match.league}</span>
                     </div>
 
@@ -1551,6 +2416,26 @@ export default function App() {
                       ))}
                     </div>
 
+                    {bet.status === "pending" && (
+                      <div className="bg-neutral-950 p-2 rounded-md border border-neutral-850 flex items-center justify-between gap-3 text-[11px] animate-fade-in">
+                        <span className="text-neutral-400 font-medium">Testar Gestão de Risco:</span>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleSettleBet(bet.id, "won")}
+                            className="bg-green-500/15 hover:bg-green-500/30 text-green-400 font-bold px-2 py-1.5 rounded transition-colors"
+                          >
+                            Simular Vitória
+                          </button>
+                          <button
+                            onClick={() => handleSettleBet(bet.id, "lost")}
+                            className="bg-red-500/15 hover:bg-red-500/30 text-red-400 font-bold px-2 py-1.5 rounded transition-colors"
+                          >
+                            Simular Derrota
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="pt-2 border-t border-neutral-850 flex justify-between items-center text-xs">
                       <div className="flex gap-4">
                         <div>
@@ -1575,10 +2460,23 @@ export default function App() {
             </div>
           )}
 
+          {/* DYNAMIC INTEGRATION: STATISTICAL DASHBOARD IA */}
+          {activeTab === "dashboard_ia" && (
+            <DashboardIA />
+          )}
+
+          {/* DYNAMIC INTEGRATION: ADMINISTRATIVE PLAYGROUND PANEL */}
+          {activeTab === "admin" && (
+            <PainelAdmin
+              matches={matches}
+              onRefreshMatches={() => setMatches(SportsService.getMatches())}
+            />
+          )}
+
         </div>
 
-        {/* RIGHT PANEL: BILHETE DO DIA & RECENT PROMPTS */}
-        <div className="w-80 shrink-0 border-l border-neutral-800 bg-neutral-900/40 p-4 flex flex-col justify-between overflow-y-auto">
+        {/* RIGHT PANEL: BILHETE DO DIA & RECENT PROMPTS - HIDDEN ON MOBILE/TABLET, SHOWN ON lg+ */}
+        <div className="hidden lg:flex w-80 shrink-0 border-l border-neutral-800 bg-neutral-900/40 p-4 flex-col justify-between overflow-y-auto">
           
           {/* Active Bet Slip (Bilhete do Dia) */}
           <div className="space-y-4">
@@ -1663,6 +2561,14 @@ export default function App() {
                       </button>
                     </div>
 
+                    <BankrollManager
+                      userBalance={userBalance}
+                      betSlip={betSlip}
+                      totalOdds={totalOdds}
+                      onApplyStake={setBetAmount}
+                      currentStake={betAmount}
+                    />
+
                     <div className="flex justify-between items-center text-xs">
                       <span className="text-neutral-400">Odd Combinada:</span>
                       <span className="font-mono text-green-400 font-bold">@{totalOdds}</span>
@@ -1675,6 +2581,27 @@ export default function App() {
                       </span>
                     </div>
 
+                    {/* Risk limits feedback indicators */}
+                    {isAnyLimitExceeded && (
+                      <div className="bg-red-500/10 border border-red-500/20 rounded p-2 text-[10px] text-red-400 flex items-start gap-1.5 leading-tight">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        <div>
+                          <strong className="text-white block">Apostas Bloqueadas</strong>
+                          Limite de perdas excedido nas configurações de Gestão de Risco.
+                        </div>
+                      </div>
+                    )}
+
+                    {!isAnyLimitExceeded && isAnyLimitNearLimit && (
+                      <div className="bg-amber-500/10 border border-amber-500/20 rounded p-2 text-[10px] text-amber-400 flex items-start gap-1.5 leading-tight">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                        <div>
+                          <strong className="text-white block">Alerta de Risco (80%+)</strong>
+                          Você está muito próximo do seu limite de perdas estabelecido.
+                        </div>
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-2 gap-2 pt-2">
                       <button
                         onClick={copySlipToClipboard}
@@ -1685,9 +2612,14 @@ export default function App() {
                       </button>
                       <button
                         onClick={handlePlaceBet}
-                        className="bg-green-500 hover:bg-green-400 text-black font-bold text-xs py-2 rounded shadow-md"
+                        disabled={isAnyLimitExceeded}
+                        className={`font-bold text-xs py-2 rounded shadow-md transition-all ${
+                          isAnyLimitExceeded
+                            ? "bg-neutral-800 text-neutral-500 cursor-not-allowed border border-neutral-700"
+                            : "bg-green-500 hover:bg-green-400 text-black cursor-pointer"
+                        }`}
                       >
-                        Registrar Aposta
+                        {isAnyLimitExceeded ? "Bloqueado" : "Registrar Aposta"}
                       </button>
                     </div>
                   </div>
@@ -1801,6 +2733,256 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* RISK MANAGEMENT SETTINGS MODAL */}
+      {showSettingsModal && (
+        <div className="fixed inset-0 bg-neutral-950/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <RiskManagementPanel
+            limits={riskLimits}
+            onChangeLimits={setRiskLimits}
+            losses={actualLosses}
+            onSimulateLoss={handleSimulateLoss}
+            onResetSimulatedLosses={handleResetSimulatedLosses}
+            onClose={() => setShowSettingsModal(false)}
+          />
+        </div>
+      )}
+
+      {/* FLOATING MOBILE BET SLIP BUTTON */}
+      <div className="lg:hidden fixed bottom-20 right-4 z-40">
+        <button
+          onClick={() => setShowMobileSlip(true)}
+          className="bg-green-500 hover:bg-green-400 text-black p-3.5 rounded-full shadow-lg flex items-center justify-center gap-1.5 font-bold relative group border border-green-600 active:scale-95 transition-all"
+        >
+          <Award className="w-5 h-5" />
+          {betSlip.length > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 bg-red-500 text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-bold border-2 border-neutral-950 animate-bounce">
+              {betSlip.length}
+            </span>
+          )}
+          <span className="text-xs">Bilhete</span>
+        </button>
+      </div>
+
+      {/* MOBILE BOTTOM NAVIGATION BAR */}
+      <div className="md:hidden h-16 bg-neutral-900 border-t border-neutral-800 fixed bottom-0 left-0 right-0 z-40 flex items-center justify-around px-2 pb-safe">
+        <button
+          onClick={() => { setActiveTab("dashboard"); setSelectedLeague("all"); }}
+          className={`flex flex-col items-center justify-center w-14 h-12 rounded transition-colors ${
+            activeTab === "dashboard" ? "text-green-500" : "text-neutral-400 hover:text-white"
+          }`}
+        >
+          <TrendingUp className="w-5 h-5" />
+          <span className="text-[9px] mt-1 font-medium tracking-tight">Dashboard</span>
+        </button>
+        <button
+          onClick={() => { setActiveTab("partidas"); setActiveFilter("high_confidence"); }}
+          className={`flex flex-col items-center justify-center w-14 h-12 rounded transition-colors ${
+            activeTab === "partidas" ? "text-green-500" : "text-neutral-400 hover:text-white"
+          }`}
+        >
+          <Award className="w-5 h-5" />
+          <span className="text-[9px] mt-1 font-medium tracking-tight">Partidas</span>
+        </button>
+        <button
+          onClick={() => { setActiveTab("simulador"); }}
+          className={`flex flex-col items-center justify-center w-14 h-12 rounded transition-colors ${
+            activeTab === "simulador" ? "text-green-500" : "text-neutral-400 hover:text-white"
+          }`}
+        >
+          <Zap className="w-5 h-5 animate-pulse text-amber-500" />
+          <span className="text-[9px] mt-1 font-medium tracking-tight">Ao Vivo</span>
+        </button>
+        <button
+          onClick={() => { setActiveTab("multiplas"); }}
+          className={`flex flex-col items-center justify-center w-14 h-12 rounded transition-colors ${
+            activeTab === "multiplas" ? "text-green-500" : "text-neutral-400 hover:text-white"
+          }`}
+        >
+          <Sparkles className="w-5 h-5" />
+          <span className="text-[9px] mt-1 font-medium tracking-tight">Múltiplas</span>
+        </button>
+        <button
+          onClick={() => { setActiveTab("minhas_apostas"); }}
+          className={`flex flex-col items-center justify-center w-14 h-12 rounded transition-colors relative ${
+            activeTab === "minhas_apostas" ? "text-green-500" : "text-neutral-400 hover:text-white"
+          }`}
+        >
+          <Clock className="w-5 h-5" />
+          <span className="text-[9px] mt-1 font-medium tracking-tight">Histórico</span>
+          {myBets.filter(b => b.status === "pending").length > 0 && (
+            <span className="absolute top-1 right-2 bg-green-500 text-neutral-950 font-bold text-[8px] px-1 rounded-full">
+              {myBets.filter(b => b.status === "pending").length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* MOBILE BET SLIP DRAWER OVERLAY */}
+      {showMobileSlip && (
+        <div className="fixed inset-0 bg-neutral-950/80 backdrop-blur-sm z-50 flex flex-col justify-end lg:hidden">
+          <div className="bg-neutral-900 border-t border-neutral-800 rounded-t-2xl max-h-[85vh] overflow-y-auto p-4 flex flex-col space-y-4 animate-slide-up">
+            <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
+                <Award className="w-4 h-4 text-green-500" /> Seu Bilhete ({betSlip.length})
+              </h3>
+              <button
+                onClick={() => setShowMobileSlip(false)}
+                className="p-1 hover:bg-neutral-800 rounded text-neutral-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {betSlip.length === 0 ? (
+              <div className="py-12 text-center text-xs text-neutral-500 italic space-y-2">
+                <HelpCircle className="w-6 h-6 mx-auto text-neutral-600" />
+                <p>Nenhum palpite selecionado para o bilhete.</p>
+                <p className="text-[10px]">Navegue nas partidas preditas e clique em "Adicionar +"</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-1">
+                  {betSlip.map((item, idx) => (
+                    <div key={idx} className="border-b border-neutral-800 pb-2.5 flex justify-between items-start text-xs">
+                      <div className="space-y-0.5">
+                        <div className="text-[10px] text-neutral-400 font-mono">{item.match.homeTeam} x {item.match.awayTeam}</div>
+                        <div className="font-semibold text-white">
+                          {item.selection === "home" ? `Vitória ${item.match.homeTeam}` : item.selection === "away" ? `Vitória ${item.match.awayTeam}` : "Empate"}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono text-green-400 font-bold bg-neutral-950 px-1.5 py-0.5 rounded">
+                          @{item.odd}
+                        </span>
+                        <button
+                          onClick={() => removeFromSlip(item.match.id)}
+                          className="p-1 hover:bg-neutral-800 rounded text-neutral-500 hover:text-red-400"
+                        >
+                          <Trash className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="pt-2 space-y-3">
+                  <div className="flex justify-between items-center text-xs text-neutral-300">
+                    <span>Valor de Entrada:</span>
+                    <div className="flex items-center gap-1.5 w-28">
+                      <span className="text-[10px] text-neutral-500">R$</span>
+                      <input
+                        type="number"
+                        value={betAmount}
+                        onChange={(e) => setBetAmount(Math.max(10, parseInt(e.target.value) || 0))}
+                        className="bg-neutral-950 border border-neutral-850 rounded py-1 px-1.5 text-xs text-white text-right w-full font-mono font-bold focus:outline-none focus:border-green-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-1.5 overflow-x-auto pb-1">
+                    <button
+                      onClick={() => setBetAmount(50)}
+                      className={`text-[10px] py-1 px-3 rounded border shrink-0 ${betAmount === 50 ? "bg-green-500/15 border-green-500 text-green-400 font-bold" : "bg-neutral-950 border-neutral-850"}`}
+                    >
+                      R$50
+                    </button>
+                    <button
+                      onClick={() => setBetAmount(100)}
+                      className={`text-[10px] py-1 px-3 rounded border shrink-0 ${betAmount === 100 ? "bg-green-500/15 border-green-500 text-green-400 font-bold" : "bg-neutral-950 border-neutral-850"}`}
+                    >
+                      R$100
+                    </button>
+                    <button
+                      onClick={() => setBetAmount(250)}
+                      className={`text-[10px] py-1 px-3 rounded border shrink-0 ${betAmount === 250 ? "bg-green-500/15 border-green-500 text-green-400 font-bold" : "bg-neutral-950 border-neutral-850"}`}
+                    >
+                      R$250
+                    </button>
+                    <button
+                      onClick={() => setBetAmount(500)}
+                      className={`text-[10px] py-1 px-3 rounded border shrink-0 ${betAmount === 500 ? "bg-green-500/15 border-green-500 text-green-400 font-bold" : "bg-neutral-950 border-neutral-850"}`}
+                    >
+                      R$500
+                    </button>
+                  </div>
+
+                  <BankrollManager
+                    userBalance={userBalance}
+                    betSlip={betSlip}
+                    totalOdds={totalOdds}
+                    onApplyStake={setBetAmount}
+                    currentStake={betAmount}
+                  />
+
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-neutral-400">Odd Combinada:</span>
+                    <span className="font-mono text-green-400 font-bold">@{totalOdds}</span>
+                  </div>
+
+                  <div className="flex justify-between items-center text-xs border-t border-neutral-800/60 pt-2">
+                    <span className="text-neutral-300 font-semibold">Retorno Potencial:</span>
+                    <span className="font-mono text-green-400 font-bold text-sm">
+                      R$ {potentialProfit.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+
+                   {/* Risk limits feedback indicators */}
+                  {isAnyLimitExceeded && (
+                    <div className="bg-red-500/10 border border-red-500/20 rounded p-2 text-[10px] text-red-400 flex items-start gap-1.5 leading-tight">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="text-white block">Apostas Bloqueadas</strong>
+                        Limite de perdas excedido nas configurações de Gestão de Risco.
+                      </div>
+                    </div>
+                  )}
+
+                  {!isAnyLimitExceeded && isAnyLimitNearLimit && (
+                    <div className="bg-amber-500/10 border border-amber-500/20 rounded p-2 text-[10px] text-amber-400 flex items-start gap-1.5 leading-tight">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                      <div>
+                        <strong className="text-white block">Alerta de Risco (80%+)</strong>
+                        Você está muito próximo do seu limite de perdas estabelecido.
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3 pt-2">
+                    <button
+                      onClick={copySlipToClipboard}
+                      className="bg-neutral-950 hover:bg-neutral-900 border border-neutral-850 text-neutral-300 text-xs py-2.5 rounded flex items-center justify-center gap-1"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      {hasCopiedSlip ? "Copiado!" : "Copiar Bilhete"}
+                    </button>
+                    <button
+                      onClick={() => {
+                        handlePlaceBet();
+                        setShowMobileSlip(false);
+                      }}
+                      disabled={isAnyLimitExceeded}
+                      className={`font-bold text-xs py-2.5 rounded shadow-md transition-all ${
+                        isAnyLimitExceeded
+                          ? "bg-neutral-800 text-neutral-500 cursor-not-allowed border border-neutral-700"
+                          : "bg-green-500 hover:bg-green-400 text-black cursor-pointer"
+                      }`}
+                    >
+                      {isAnyLimitExceeded ? "Bloqueado" : "Registrar Aposta"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Mock Push Notification Toast Floating Container */}
+      <PushNotificationToastContainer 
+        toasts={activeToasts} 
+        onClose={(id) => setActiveToasts((prev) => prev.filter((t) => t.id !== id))} 
+      />
 
     </div>
   );
