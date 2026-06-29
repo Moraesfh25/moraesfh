@@ -1,0 +1,6 @@
+{
+  "name": "BetVision Pro",
+  "description": "AI-powered sports analytics and football prediction dashboard with high-density stats tracking, interactive betting slip generator, and real-time match simulation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
