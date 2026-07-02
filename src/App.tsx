@@ -54,7 +54,12 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend
+  Legend,
+  Radar,
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis
 } from "recharts";
 import { SportsService } from "./services/sportsService";
 import { AIService } from "./services/aiService";
@@ -153,6 +158,39 @@ const getProbabilityTrendData = (match: Match) => {
       }
     ];
   }
+};
+
+// Helper to generate radar chart data from Match tactical strengths
+const getRadarData = (match: Match) => {
+  const homeAtt = match.attackingStrength?.home ?? 50;
+  const awayAtt = match.attackingStrength?.away ?? 50;
+  const homeDef = match.defendingStrength?.home ?? 50;
+  const awayDef = match.defendingStrength?.away ?? 50;
+  
+  let homePos = 50;
+  let awayPos = 50;
+  if (match.stats?.possession && match.stats.possession.length >= 2) {
+    homePos = match.stats.possession[0];
+    awayPos = match.stats.possession[1];
+  }
+
+  return [
+    {
+      metric: "Ataque",
+      casa: homeAtt,
+      fora: awayAtt,
+    },
+    {
+      metric: "Defesa",
+      casa: homeDef,
+      fora: awayDef,
+    },
+    {
+      metric: "Posse",
+      casa: homePos,
+      fora: awayPos,
+    }
+  ];
 };
 
 export default function App() {
@@ -975,28 +1013,52 @@ export default function App() {
     
     // Check risk limits
     if (riskLimits.enabledDaily && totalDailyLoss >= riskLimits.daily) {
-      alert(`🛑 Aposta Bloqueada: Limite Diário de Perdas Excedido (R$ ${riskLimits.daily.toFixed(2)}). Visite o painel de Gestão de Risco para redefinir.`);
+      triggerPushNotification(
+        "Aposta Bloqueada",
+        `Limite Diário de Perdas Excedido (R$ ${riskLimits.daily.toFixed(2)}). Visite o painel de Gestão de Risco para redefinir.`,
+        "status"
+      );
       return;
     }
     if (riskLimits.enabledWeekly && totalWeeklyLoss >= riskLimits.weekly) {
-      alert(`🛑 Aposta Bloqueada: Limite Semanal de Perdas Excedido (R$ ${riskLimits.weekly.toFixed(2)}). Visite o painel de Gestão de Risco para redefinir.`);
+      triggerPushNotification(
+        "Aposta Bloqueada",
+        `Limite Semanal de Perdas Excedido (R$ ${riskLimits.weekly.toFixed(2)}). Visite o painel de Gestão de Risco para redefinir.`,
+        "status"
+      );
       return;
     }
     if (riskLimits.enabledMonthly && totalMonthlyLoss >= riskLimits.monthly) {
-      alert(`🛑 Aposta Bloqueada: Limite Mensal de Perdas Excedido (R$ ${riskLimits.monthly.toFixed(2)}). Visite o painel de Gestão de Risco para redefinir.`);
+      triggerPushNotification(
+        "Aposta Bloqueada",
+        `Limite Mensal de Perdas Excedido (R$ ${riskLimits.monthly.toFixed(2)}). Visite o painel de Gestão de Risco para redefinir.`,
+        "status"
+      );
       return;
     }
     if (riskLimits.enabledMinBankroll && userBalance <= (riskLimits.minBankroll ?? 500)) {
-      alert(`🛑 Aposta Bloqueada: Banca Mínima de Segurança Atingida (R$ ${(riskLimits.minBankroll ?? 500).toFixed(2)}). Seu saldo atual é de R$ ${userBalance.toFixed(2)}.`);
+      triggerPushNotification(
+        "Banca de Segurança Atingida",
+        `Aposta Bloqueada: Banca Mínima de Segurança Atingida (R$ ${(riskLimits.minBankroll ?? 500).toFixed(2)}). Seu saldo atual é de R$ ${userBalance.toFixed(2)}.`,
+        "status"
+      );
       return;
     }
     if (riskLimits.enabledMinBankroll && (userBalance - betAmount) < (riskLimits.minBankroll ?? 500)) {
-      alert(`🛑 Aposta Bloqueada: Esta aposta faria seu saldo cair para R$ ${(userBalance - betAmount).toFixed(2)}, abaixo da sua Banca Mínima de Segurança configurada de R$ ${(riskLimits.minBankroll ?? 500).toFixed(2)}.`);
+      triggerPushNotification(
+        "Banca de Segurança Violada",
+        `Aposta Bloqueada: Esta aposta faria seu saldo cair para R$ ${(userBalance - betAmount).toFixed(2)}, abaixo da sua Banca Mínima de Segurança configurada de R$ ${(riskLimits.minBankroll ?? 500).toFixed(2)}.`,
+        "status"
+      );
       return;
     }
 
     if (userBalance < betAmount) {
-      alert("Saldo insuficiente para realizar esta aposta.");
+      triggerPushNotification(
+        "Saldo Insuficiente",
+        "Você não possui saldo suficiente para realizar esta aposta com o valor atual.",
+        "status"
+      );
       return;
     }
 
@@ -1022,7 +1084,11 @@ export default function App() {
     setBetSlip([]); // Clear slip
     
     // Trigger feedback notification
-    alert("✓ Aposta registrada com sucesso pelo Motor de IA!");
+    triggerPushNotification(
+      "Aposta Registrada",
+      "Sua aposta foi processada e registrada com sucesso pelo Motor de IA! 🚀",
+      "status"
+    );
   };
 
   const handleSettleBet = (betId: string, status: "won" | "lost") => {
@@ -1239,7 +1305,11 @@ export default function App() {
 
     setBetSlip(itemsToAdd);
     setGeneratedSlipResult(null);
-    alert("✓ Todos os palpites gerados pela IA integrados ao seu Bilhete Principal!");
+    triggerPushNotification(
+      "Palpites Integrados",
+      "Todos os palpites recomendados pela IA foram integrados com sucesso ao seu Bilhete Principal!",
+      "info"
+    );
   };
 
   // AI Chat Consultant triggers simulated responses using AIService
@@ -1293,7 +1363,11 @@ export default function App() {
         if (match.isLive) {
           const currentScore = match.liveScore || [1, 1];
           const updatedScore: [number, number] = [currentScore[0], currentScore[1] + 1]; // Barcelona scores!
-          alert(`⚡ GOL DO BARCELONA! O placar agora é Real Madrid ${updatedScore[0]} x ${updatedScore[1]} Barcelona!`);
+          triggerPushNotification(
+            "⚡ GOL DO BARCELONA!",
+            `O placar em tempo real mudou! Real Madrid ${updatedScore[0]} x ${updatedScore[1]} Barcelona!`,
+            "goal"
+          );
           
           const currentStats = match.stats || {
             possession: [50, 50],
@@ -1675,7 +1749,11 @@ export default function App() {
                           "info"
                         );
                       } catch (err) {
-                        alert("Ocorreu um erro ao exportar seus dados.");
+                        triggerPushNotification(
+                          "Erro de Exportação",
+                          "Ocorreu um erro ao exportar seus dados em conformidade com a LGPD.",
+                          "status"
+                        );
                       }
                     }}
                     className="w-full text-left px-2.5 py-1.5 rounded hover:bg-neutral-800 text-neutral-300 hover:text-white transition-colors font-medium flex items-center gap-2 cursor-pointer bg-transparent border-none"
@@ -1691,7 +1769,11 @@ export default function App() {
                         localStorage.removeItem("betvision_user");
                         localStorage.removeItem("betvision_admin_logs");
                         setCurrentUser(null);
-                        alert("Sua conta foi excluída definitivamente. Todos os seus dados de sessão foram expurgados.");
+                        triggerPushNotification(
+                          "Conta Excluída",
+                          "Sua conta foi excluída definitivamente. Todos os seus dados de sessão foram expurgados do navegador.",
+                          "status"
+                        );
                       }
                     }}
                     className="w-full text-left px-2.5 py-1.5 rounded hover:bg-red-500/10 text-red-400 hover:text-red-300 transition-colors font-medium flex items-center gap-2 cursor-pointer bg-transparent border-none"
@@ -2664,6 +2746,65 @@ export default function App() {
                                   </div>
                                 </div>
                               </div>
+
+                              {/* Radar Chart */}
+                              <div className="pt-2 border-t border-neutral-800/40">
+                                <div className="text-[10px] text-neutral-400 font-semibold mb-2">Mapa Radar de Confronto</div>
+                                <div className="h-44 w-full select-none text-[10px]">
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <RadarChart
+                                      cx="50%"
+                                      cy="48%"
+                                      outerRadius="60%"
+                                      data={getRadarData(activeMatchDetails)}
+                                    >
+                                      <PolarGrid stroke="#334155" opacity={0.4} />
+                                      <PolarAngleAxis
+                                        dataKey="metric"
+                                        tick={{ fill: "#9ca3af", fontSize: 9, fontWeight: 600 }}
+                                      />
+                                      <PolarRadiusAxis
+                                        angle={30}
+                                        domain={[0, 100]}
+                                        tick={{ fill: "#4b5563", fontSize: 7 }}
+                                        tickCount={4}
+                                        axisLine={false}
+                                      />
+                                      <Radar
+                                        name={activeMatchDetails.homeTeam}
+                                        dataKey="casa"
+                                        stroke="#10b981"
+                                        fill="#10b981"
+                                        fillOpacity={0.25}
+                                      />
+                                      <Radar
+                                        name={activeMatchDetails.awayTeam}
+                                        dataKey="fora"
+                                        stroke="#ef4444"
+                                        fill="#ef4444"
+                                        fillOpacity={0.25}
+                                      />
+                                      <Tooltip
+                                        contentStyle={{
+                                          backgroundColor: "#0d0f14",
+                                          borderColor: "#1f2937",
+                                          borderRadius: "6px",
+                                          fontSize: "10px",
+                                          color: "#f3f4f6"
+                                        }}
+                                        itemStyle={{ padding: "1px 0" }}
+                                      />
+                                      <Legend
+                                        verticalAlign="bottom"
+                                        height={16}
+                                        iconSize={6}
+                                        iconType="circle"
+                                        wrapperStyle={{ fontSize: "8px", paddingTop: "4px" }}
+                                      />
+                                    </RadarChart>
+                                  </ResponsiveContainer>
+                                </div>
+                              </div>
                             </div>
 
                             {/* AI Expert Text rationale */}
@@ -3382,7 +3523,11 @@ export default function App() {
                                 clipText += `💰 *Stake:* R$ ${betAmount}\n`;
                                 clipText += `🏆 *Retorno:* R$ ${(betAmount * generatedSlipResult.odds).toFixed(2)}\n`;
                                 navigator.clipboard.writeText(clipText);
-                                alert("✓ Conteúdo do bilhete copiado para a área de transferência!");
+                                triggerPushNotification(
+                                  "Copiado!",
+                                  "Conteúdo do Bilhete Inteligente copiado para a área de transferência com sucesso!",
+                                  "info"
+                                );
                               }}
                               className="bg-neutral-800 hover:bg-neutral-750 text-neutral-300 px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
                               title="Copiar texto formatado"
@@ -3404,7 +3549,6 @@ export default function App() {
                                   "As seleções do Bilhete Inteligente IA foram transferidas com sucesso para seu cupom de apostas do dia!",
                                   "info"
                                 );
-                                alert("✓ Seleções importadas para seu Cupom Ativo do Dia!");
                               }}
                               className="bg-green-500 hover:bg-green-400 text-black px-3 py-1.5 rounded-lg text-[10px] font-bold cursor-pointer transition-transform active:scale-95 flex items-center gap-1"
                             >
@@ -3524,30 +3668,65 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-2 pt-2 border-t border-neutral-800/60 text-center">
-                      <div className="bg-neutral-950 p-1.5 rounded text-xs">
-                        <div className="text-[9px] text-neutral-500">MANDANTE</div>
-                        <div className="font-mono font-semibold">{match.odds.home}</div>
-                      </div>
-                      <div className="bg-neutral-950 p-1.5 rounded text-xs">
-                        <div className="text-[9px] text-neutral-500">EMPATE</div>
-                        <div className="font-mono font-semibold">{match.odds.draw}</div>
-                      </div>
-                      <div className="bg-neutral-950 p-1.5 rounded text-xs">
-                        <div className="text-[9px] text-neutral-500">VISITANTE</div>
-                        <div className="font-mono font-semibold">{match.odds.away}</div>
-                      </div>
-                    </div>
+                    {(() => {
+                      const isHomeSelected = betSlip.some(item => item.match.id === match.id && item.selection === "home");
+                      const isDrawSelected = betSlip.some(item => item.match.id === match.id && item.selection === "draw");
+                      const isAwaySelected = betSlip.some(item => item.match.id === match.id && item.selection === "away");
 
-                    <div className="flex justify-between items-center text-xs pt-1.5">
-                      <span className="text-[10px] text-neutral-500 font-mono">{match.date}, {match.time}</span>
-                      <button
-                        onClick={() => addToBetSlip(match, "home", match.odds.home)}
-                        className="bg-green-500 hover:bg-green-400 text-black font-bold text-xs px-3 py-1 rounded transition-all"
-                      >
-                        Selecionar
-                      </button>
-                    </div>
+                      return (
+                        <>
+                          <div className="grid grid-cols-3 gap-2 pt-2 border-t border-neutral-800/60 text-center">
+                            <button
+                              onClick={() => addToBetSlip(match, "home", match.odds.home)}
+                              className={`p-1.5 rounded text-xs transition-colors cursor-pointer border ${
+                                isHomeSelected
+                                  ? "bg-green-500/15 border-green-500/40 text-green-400 font-bold"
+                                  : "bg-neutral-950 border-neutral-850 hover:bg-neutral-900 text-neutral-300"
+                              }`}
+                            >
+                              <div className="text-[8px] text-neutral-500 uppercase font-mono">MANDANTE</div>
+                              <div className="font-mono font-bold mt-0.5">@{match.odds.home.toFixed(2)}</div>
+                            </button>
+                            <button
+                              onClick={() => addToBetSlip(match, "draw", match.odds.draw)}
+                              className={`p-1.5 rounded text-xs transition-colors cursor-pointer border ${
+                                isDrawSelected
+                                  ? "bg-green-500/15 border-green-500/40 text-green-400 font-bold"
+                                  : "bg-neutral-950 border-neutral-850 hover:bg-neutral-900 text-neutral-300"
+                              }`}
+                            >
+                              <div className="text-[8px] text-neutral-500 uppercase font-mono">EMPATE</div>
+                              <div className="font-mono font-bold mt-0.5">@{match.odds.draw.toFixed(2)}</div>
+                            </button>
+                            <button
+                              onClick={() => addToBetSlip(match, "away", match.odds.away)}
+                              className={`p-1.5 rounded text-xs transition-colors cursor-pointer border ${
+                                isAwaySelected
+                                  ? "bg-green-500/15 border-green-500/40 text-green-400 font-bold"
+                                  : "bg-neutral-950 border-neutral-850 hover:bg-neutral-900 text-neutral-300"
+                              }`}
+                            >
+                              <div className="text-[8px] text-neutral-500 uppercase font-mono">VISITANTE</div>
+                              <div className="font-mono font-bold mt-0.5">@{match.odds.away.toFixed(2)}</div>
+                            </button>
+                          </div>
+
+                          <div className="flex justify-between items-center text-xs pt-1.5">
+                            <span className="text-[10px] text-neutral-500 font-mono">{match.date}, {match.time}</span>
+                            <button
+                              onClick={() => setSelectedMatch(selectedMatch?.id === match.id ? null : match)}
+                              className={`font-bold text-xs px-3 py-1.5 rounded-lg transition-all border cursor-pointer ${
+                                selectedMatch?.id === match.id
+                                  ? "bg-neutral-700 text-white border-neutral-600"
+                                  : "bg-green-500 hover:bg-green-400 text-black border-transparent"
+                              }`}
+                            >
+                              {selectedMatch?.id === match.id ? "Fechar Ficha" : "Ver Ficha IA"}
+                            </button>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </motion.div>
                 ))}
               </div>
