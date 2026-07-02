@@ -114,7 +114,6 @@ export const PremiumSaaSModal: React.FC<PremiumSaaSModalProps> = ({
         setPixTimeLeft((prev) => {
           if (prev <= 1) {
             clearInterval(timer);
-            completePayment();
             return 0;
           }
           return prev - 1;
@@ -123,6 +122,12 @@ export const PremiumSaaSModal: React.FC<PremiumSaaSModalProps> = ({
     }
     return () => clearInterval(timer);
   }, [isOpen, paymentMethod, isProcessing, isSuccess]);
+
+  useEffect(() => {
+    if (isOpen && paymentMethod === "pix" && isProcessing && !isSuccess && pixTimeLeft === 0) {
+      completePayment();
+    }
+  }, [pixTimeLeft, isOpen, paymentMethod, isProcessing, isSuccess]);
 
   const handleCardNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     // Format card number with spaces

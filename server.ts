@@ -77,6 +77,50 @@ app.post("/api/predict", async (req, res) => {
   }
 });
 
+// API Route: Football API Proxy to protect credentials
+app.get("/api/football", async (req, res) => {
+  const { endpoint, ...queryParams } = req.query;
+  if (!endpoint) {
+    return res.status(400).json({ error: "Endpoint do API-Football é obrigatório." });
+  }
+
+  const apiKey = process.env.API_FOOTBALL_KEY;
+  if (!apiKey || apiKey === "MY_API_FOOTBALL_KEY" || apiKey.trim() === "") {
+    // Return an empty success structure to avoid crashes when API is not configured yet
+    return res.json({
+      get: endpoint,
+      parameters: queryParams,
+      errors: [],
+      results: 0,
+      paging: { current: 1, total: 1 },
+      response: []
+    });
+  }
+
+  try {
+    const urlParams = new URLSearchParams(queryParams as Record<string, string>).toString();
+    const targetUrl = `https://v3.football.api-sports.io/${endpoint}?${urlParams}`;
+
+    const apiResponse = await fetch(targetUrl, {
+      method: "GET",
+      headers: {
+        "x-rapidapi-key": apiKey,
+        "x-rapidapi-host": "v3.football.api-sports.io"
+      }
+    });
+
+    if (!apiResponse.ok) {
+      throw new Error(`RapidAPI responded with status: ${apiResponse.status}`);
+    }
+
+    const data = await apiResponse.json();
+    return res.json(data);
+  } catch (error: any) {
+    console.error("API-Football proxy call failed:", error);
+    return res.status(500).json({ error: "Falha ao se conectar com API-Football", details: error?.message });
+  }
+});
+
 // API Route: AI chat consultant with history
 app.post("/api/chat", async (req, res) => {
   const { message, chatHistory, relevantMatch } = req.body;

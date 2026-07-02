@@ -24,6 +24,8 @@ export interface RiskLimits {
   enabledDaily: boolean;
   enabledWeekly: boolean;
   enabledMonthly: boolean;
+  minBankroll?: number;
+  enabledMinBankroll?: boolean;
 }
 
 export interface RiskLosses {
@@ -39,6 +41,7 @@ interface RiskManagementPanelProps {
   onSimulateLoss: (amount: number, period: "daily" | "weekly" | "monthly") => void;
   onResetSimulatedLosses: () => void;
   onClose: () => void;
+  userBalance?: number;
 }
 
 export const RiskManagementPanel: React.FC<RiskManagementPanelProps> = ({
@@ -47,18 +50,20 @@ export const RiskManagementPanel: React.FC<RiskManagementPanelProps> = ({
   losses,
   onSimulateLoss,
   onResetSimulatedLosses,
-  onClose
+  onClose,
+  userBalance
 }) => {
   const [activeTab, setActiveTab] = useState<"limits" | "responsible" | "history">("limits");
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  const handleToggle = (field: "enabledDaily" | "enabledWeekly" | "enabledMonthly") => {
-    const updated = { ...limits, [field]: !limits[field] };
+  const handleToggle = (field: "enabledDaily" | "enabledWeekly" | "enabledMonthly" | "enabledMinBankroll") => {
+    const val = field === "enabledMinBankroll" ? !(limits.enabledMinBankroll ?? false) : !limits[field];
+    const updated = { ...limits, [field]: val };
     onChangeLimits(updated);
     showTempSuccess("✓ Configuração de limite atualizada com sucesso!");
   };
 
-  const handleLimitChange = (field: "daily" | "weekly" | "monthly", value: number) => {
+  const handleLimitChange = (field: "daily" | "weekly" | "monthly" | "minBankroll", value: number) => {
     const cleanVal = Math.max(0, isNaN(value) ? 0 : value);
     const updated = { ...limits, [field]: cleanVal };
     onChangeLimits(updated);
@@ -335,6 +340,68 @@ export const RiskManagementPanel: React.FC<RiskManagementPanelProps> = ({
                 </div>
               ) : (
                 <p className="text-[11px] text-neutral-500 italic">Limite mensal desativado.</p>
+              )}
+            </div>
+
+            {/* MINIMUM BANKROLL */}
+            <div className="bg-neutral-950/40 border border-neutral-850 rounded-lg p-3.5 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  <span className="text-xs font-bold text-white uppercase font-mono">Banca Mínima de Segurança</span>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={limits.enabledMinBankroll ?? false} 
+                    onChange={() => handleToggle("enabledMinBankroll")} 
+                    className="sr-only peer"
+                  />
+                  <div className="w-7 h-4 bg-neutral-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-neutral-400 after:border-neutral-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-green-500 peer-checked:after:bg-neutral-950 peer-checked:after:border-transparent"></div>
+                </label>
+              </div>
+
+              {(limits.enabledMinBankroll ?? false) ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-[11px] text-neutral-400 font-sans">Preservar no Mínimo:</span>
+                    <div className="flex items-center bg-neutral-950 border border-neutral-800 rounded px-2 py-1 max-w-[140px]">
+                      <span className="text-[10px] text-neutral-500 font-bold mr-1">R$</span>
+                      <input 
+                        type="number" 
+                        value={limits.minBankroll ?? 500} 
+                        onChange={(e) => handleLimitChange("minBankroll", parseFloat(e.target.value))}
+                        className="bg-transparent text-xs font-bold text-white font-mono w-full focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Progress Gauge or Current Balance info */}
+                  {userBalance !== undefined && (
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] font-mono">
+                        <span className="text-neutral-400">
+                          Banca Atual: <strong className="text-white">R$ {userBalance.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</strong>
+                        </span>
+                        <span className={userBalance <= (limits.minBankroll ?? 500) ? "text-red-400 font-bold animate-pulse" : "text-green-400"}>
+                          {userBalance <= (limits.minBankroll ?? 500) ? "BLOQUEADO (Banca Protegida!)" : "EM SEGURANÇA"}
+                        </span>
+                      </div>
+                      <div className="w-full bg-neutral-900 rounded-full h-2 overflow-hidden border border-neutral-800 flex">
+                        <div 
+                          className="h-full bg-red-500 transition-all duration-350"
+                          style={{ width: `${Math.min(100, Math.round(((limits.minBankroll ?? 500) / Math.max(1, userBalance)) * 100))}%` }}
+                        />
+                        <div 
+                          className="h-full bg-green-500 transition-all duration-350"
+                          style={{ width: `${Math.max(0, 100 - Math.round(((limits.minBankroll ?? 500) / Math.max(1, userBalance)) * 100))}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-[11px] text-neutral-500 italic">Banca mínima de segurança desativada. Nenhuma restrição baseada em saldo mínimo.</p>
               )}
             </div>
 

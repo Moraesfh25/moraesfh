@@ -46,6 +46,16 @@ import {
 } from "lucide-react";
 
 import { Match, ChatMessage, BetSlipItem, UserBet, PersonalFilter, AdminLog } from "./types";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend
+} from "recharts";
 import { SportsService } from "./services/sportsService";
 import { AIService } from "./services/aiService";
 import { MultiplesService } from "./services/multiplesService";
@@ -74,6 +84,77 @@ import {
   ActiveToast 
 } from "./components/NotificationCenter";
 
+// Helper to generate probability trend data based on match state and seed
+const getProbabilityTrendData = (match: Match) => {
+  const seed = parseInt(match.id.replace(/\D/g, "") || "42") % 100;
+  
+  if (match.isLive) {
+    const currentMin = match.liveMinute || 0;
+    const points: Array<{ minute: string; home: number; draw: number; away: number }> = [];
+    
+    const hBase = match.probabilities.home;
+    const dBase = match.probabilities.draw;
+    const aBase = match.probabilities.away;
+    
+    const intervals = [0, 15, 30, 45, 60, 75, 90];
+    intervals.forEach((min) => {
+      if (min <= Math.max(currentMin, 15)) {
+        const offsetH = Math.sin((min + seed) * 0.1) * 8;
+        const offsetA = Math.cos((min + seed) * 0.1) * 8;
+        
+        let h = Math.max(5, Math.min(90, Math.round(hBase + offsetH)));
+        let a = Math.max(5, Math.min(90, Math.round(aBase + offsetA)));
+        let d = 100 - h - a;
+        if (d < 5) {
+          d = 5;
+          const total = h + a;
+          h = Math.round((h / total) * 95);
+          a = 95 - h;
+        }
+        
+        points.push({
+          minute: `${min}'`,
+          home: h,
+          draw: d,
+          away: a
+        });
+      }
+    });
+    return points;
+  } else {
+    const hBase = match.probabilities.home;
+    const dBase = match.probabilities.draw;
+    const aBase = match.probabilities.away;
+    
+    return [
+      {
+        minute: "5d atrás",
+        home: Math.max(5, Math.min(95, Math.round(hBase + Math.sin(seed) * 5))),
+        draw: Math.max(5, Math.min(95, Math.round(dBase + Math.cos(seed) * 3))),
+        away: Math.max(5, Math.min(95, Math.round(aBase - Math.sin(seed) * 4)))
+      },
+      {
+        minute: "3d atrás",
+        home: Math.max(5, Math.min(95, Math.round(hBase + Math.cos(seed + 1) * 4))),
+        draw: Math.max(5, Math.min(95, Math.round(dBase - Math.sin(seed + 1) * 2))),
+        away: Math.max(5, Math.min(95, Math.round(aBase + Math.cos(seed + 1) * 3)))
+      },
+      {
+        minute: "1d atrás",
+        home: Math.max(5, Math.min(95, Math.round(hBase - Math.sin(seed + 2) * 2))),
+        draw: Math.max(5, Math.min(95, Math.round(dBase + Math.cos(seed + 2) * 1))),
+        away: Math.max(5, Math.min(95, Math.round(aBase + Math.sin(seed + 2) * 2)))
+      },
+      {
+        minute: "Atual",
+        home: hBase,
+        draw: dBase,
+        away: aBase
+      }
+    ];
+  }
+};
+
 export default function App() {
   // Navigation tabs: "dashboard" | "partidas" | "simulador" | "multiplas" | "minhas_apostas"
   const [activeTab, setActiveTab] = useState<string>("dashboard");
@@ -98,25 +179,21 @@ export default function App() {
 
   // Risk Management State
   const [riskLimits, setRiskLimits] = useState<RiskLimits>(() => {
+    const defaults = {
+      daily: 500,
+      weekly: 2000,
+      monthly: 5000,
+      enabledDaily: true,
+      enabledWeekly: true,
+      enabledMonthly: true,
+      minBankroll: 500,
+      enabledMinBankroll: false
+    };
     try {
       const saved = localStorage.getItem("betvision_risk_limits");
-      return saved ? JSON.parse(saved) : {
-        daily: 500,
-        weekly: 2000,
-        monthly: 5000,
-        enabledDaily: true,
-        enabledWeekly: true,
-        enabledMonthly: true
-      };
+      return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
     } catch {
-      return {
-        daily: 500,
-        weekly: 2000,
-        monthly: 5000,
-        enabledDaily: true,
-        enabledWeekly: true,
-        enabledMonthly: true
-      };
+      return defaults;
     }
   });
 
@@ -465,8 +542,83 @@ export default function App() {
   // Balance
   const [userBalance, setUserBalance] = useState<number>(2450.0);
 
+  // Splash Screen & UI States
+  const [showSplashScreen, setShowSplashScreen] = useState<boolean>(true);
+  const [splashProgress, setSplashProgress] = useState<number>(0);
+  const [splashStatusText, setSplashStatusText] = useState<string>("Iniciando conexão neural...");
+  const [isBrasileiraoOpen, setIsBrasileiraoOpen] = useState<boolean>(false);
+  const [isPremierOpen, setIsPremierOpen] = useState<boolean>(false);
+  const [matchAnalysisProgress, setMatchAnalysisProgress] = useState<number>(0);
+
+  // Splash Screen simulation
+  useEffect(() => {
+    if (!showSplashScreen) return;
+    let currentProgress = 0;
+    const statusTexts = [
+      { limit: 15, text: "Conectando ao banco de dados global..." },
+      { limit: 35, text: "Analisando 11.450 partidas do banco de dados..." },
+      { limit: 55, text: "Avaliando probabilidades matemáticas neurais..." },
+      { limit: 75, text: "Sincronizando boletins de lesões e suspensões..." },
+      { limit: 90, text: "Analisando 142 mercados e variações de odds..." },
+      { limit: 99, text: "Validando integridade da gestão de risco..." },
+      { limit: 100, text: "✔ Sincronização concluída com sucesso!" }
+    ];
+    
+    const interval = setInterval(() => {
+      currentProgress += Math.floor(Math.random() * 8) + 6;
+      if (currentProgress >= 100) {
+        currentProgress = 100;
+        setSplashProgress(100);
+        setSplashStatusText("✔ Sistema pronto!");
+        clearInterval(interval);
+        setTimeout(() => {
+          setShowSplashScreen(false);
+        }, 800);
+      } else {
+        setSplashProgress(currentProgress);
+        const textObj = statusTexts.find(t => currentProgress <= t.limit);
+        if (textObj) {
+          setSplashStatusText(textObj.text);
+        }
+      }
+    }, 120);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Real-time Match Analysis progress simulation
+  useEffect(() => {
+    if (selectedMatch) {
+      setMatchAnalysisProgress(0);
+      let cur = 0;
+      const interval = setInterval(() => {
+        cur += 20;
+        if (cur >= 100) {
+          cur = 100;
+          clearInterval(interval);
+        }
+        setMatchAnalysisProgress(cur);
+      }, 150);
+      return () => clearInterval(interval);
+    }
+  }, [selectedMatch]);
+
   // Mobile UI States
   const [showMobileSlip, setShowMobileSlip] = useState<boolean>(false);
+
+  // Dashboard AI Consultant State
+  const [dashboardAiAnswer, setDashboardAiAnswer] = useState<string>(
+    `🤖 *BetVision AI Copilot* \n` +
+    `━━━━━━━━━━━━━━━━━━━\n` +
+    `Olá, José. Boa noite.\n` +
+    `Analisei 148 partidas de futebol programadas para hoje.\n\n` +
+    `Aqui está o meu diagnóstico de IA:\n` +
+    `🟢 **7 apostas seguras** (Taxa de assertividade calculada > 91%)\n` +
+    `🟡 **3 apostas de valor** (Variação de odds em assimetria (+EV))\n` +
+    `🔴 **2 jogos recomendados para evitar** (Clássicos e alto risco de cartões)\n\n` +
+    `Quer que eu monte um bilhete inteligente múltiplo agora mesmo com estas melhores oportunidades?`
+  );
+  const [isDashboardAiTyping, setIsDashboardAiTyping] = useState<boolean>(false);
 
   // ROI Calculator interactive state
   const [simulatedInvestment, setSimulatedInvestment] = useState<number>(500);
@@ -532,12 +684,14 @@ export default function App() {
   const isDailyExceeded = riskLimits.enabledDaily && totalDailyLoss >= riskLimits.daily;
   const isWeeklyExceeded = riskLimits.enabledWeekly && totalWeeklyLoss >= riskLimits.weekly;
   const isMonthlyExceeded = riskLimits.enabledMonthly && totalMonthlyLoss >= riskLimits.monthly;
-  const isAnyLimitExceeded = isDailyExceeded || isWeeklyExceeded || isMonthlyExceeded;
+  const isMinBankrollExceeded = riskLimits.enabledMinBankroll && userBalance <= (riskLimits.minBankroll ?? 500);
+  const isAnyLimitExceeded = isDailyExceeded || isWeeklyExceeded || isMonthlyExceeded || isMinBankrollExceeded;
 
   const isDailyNearLimit = riskLimits.enabledDaily && totalDailyLoss >= riskLimits.daily * 0.8 && totalDailyLoss < riskLimits.daily;
   const isWeeklyNearLimit = riskLimits.enabledWeekly && totalWeeklyLoss >= riskLimits.weekly * 0.8 && totalWeeklyLoss < riskLimits.weekly;
   const isMonthlyNearLimit = riskLimits.enabledMonthly && totalMonthlyLoss >= riskLimits.monthly * 0.8 && totalMonthlyLoss < riskLimits.monthly;
-  const isAnyLimitNearLimit = isDailyNearLimit || isWeeklyNearLimit || isMonthlyNearLimit;
+  const isMinBankrollNearLimit = riskLimits.enabledMinBankroll && userBalance > (riskLimits.minBankroll ?? 500) && userBalance <= (riskLimits.minBankroll ?? 500) * 1.2;
+  const isAnyLimitNearLimit = isDailyNearLimit || isWeeklyNearLimit || isMonthlyNearLimit || isMinBankrollNearLimit;
 
   const lastAlertsRef = useRef<Record<string, boolean>>({});
 
@@ -613,10 +767,43 @@ export default function App() {
           lastAlertsRef.current[c.key] = false;
         }
       });
+
+      // Check minimum bankroll limits explicitly
+      if (riskLimits.enabledMinBankroll) {
+        const minVal = riskLimits.minBankroll ?? 500;
+        
+        // 100% block check
+        const limitMet100 = userBalance <= minVal;
+        const alreadyAlerted100 = lastAlertsRef.current["minBankroll_100"];
+        if (limitMet100 && !alreadyAlerted100) {
+          triggerPushNotification(
+            "🛑 BANCA PROTEGIDA ALCANÇADA",
+            `Seu saldo atingiu o valor de banca mínima estipulado de R$ ${minVal.toFixed(2)}. Novas apostas estão bloqueadas para proteger seu capital.`,
+            "status"
+          );
+          lastAlertsRef.current["minBankroll_100"] = true;
+        } else if (!limitMet100 && alreadyAlerted100) {
+          lastAlertsRef.current["minBankroll_100"] = false;
+        }
+
+        // 80% close-to-limit check
+        const limitMet80 = userBalance <= minVal * 1.2 && userBalance > minVal;
+        const alreadyAlerted80 = lastAlertsRef.current["minBankroll_80"];
+        if (limitMet80 && !alreadyAlerted80) {
+          triggerPushNotification(
+            "⚠️ ALERTA DE BANCA MÍNIMA",
+            `Seu saldo de R$ ${userBalance.toFixed(2)} está muito próximo do limite de banca mínima de R$ ${minVal.toFixed(2)}.`,
+            "probability"
+          );
+          lastAlertsRef.current["minBankroll_80"] = true;
+        } else if (!limitMet80 && alreadyAlerted80) {
+          lastAlertsRef.current["minBankroll_80"] = false;
+        }
+      }
     };
 
     checkLimits();
-  }, [totalDailyLoss, totalWeeklyLoss, totalMonthlyLoss, riskLimits]);
+  }, [totalDailyLoss, totalWeeklyLoss, totalMonthlyLoss, riskLimits, userBalance]);
 
   const [matches, setMatches] = useState<Match[]>(() => SportsService.getMatches());
 
@@ -799,6 +986,14 @@ export default function App() {
       alert(`🛑 Aposta Bloqueada: Limite Mensal de Perdas Excedido (R$ ${riskLimits.monthly.toFixed(2)}). Visite o painel de Gestão de Risco para redefinir.`);
       return;
     }
+    if (riskLimits.enabledMinBankroll && userBalance <= (riskLimits.minBankroll ?? 500)) {
+      alert(`🛑 Aposta Bloqueada: Banca Mínima de Segurança Atingida (R$ ${(riskLimits.minBankroll ?? 500).toFixed(2)}). Seu saldo atual é de R$ ${userBalance.toFixed(2)}.`);
+      return;
+    }
+    if (riskLimits.enabledMinBankroll && (userBalance - betAmount) < (riskLimits.minBankroll ?? 500)) {
+      alert(`🛑 Aposta Bloqueada: Esta aposta faria seu saldo cair para R$ ${(userBalance - betAmount).toFixed(2)}, abaixo da sua Banca Mínima de Segurança configurada de R$ ${(riskLimits.minBankroll ?? 500).toFixed(2)}.`);
+      return;
+    }
 
     if (userBalance < betAmount) {
       alert("Saldo insuficiente para realizar esta aposta.");
@@ -884,6 +1079,79 @@ export default function App() {
       setHasCopiedSlip(true);
       setTimeout(() => setHasCopiedSlip(false), 2500);
     });
+  };
+
+  const [hasSharedSlip, setHasSharedSlip] = useState<boolean>(false);
+
+  // Generate a snapshot of the current betting slip and share it directly via a native browser share API
+  const shareSlipViaWebAPI = () => {
+    if (betSlip.length === 0) return;
+    
+    let text = "🎯 *BILHETE DE HOJE - BETVISION PRO* 🎯\n";
+    text += "🤖 _Palpites gerados por IA em tempo real_\n\n";
+    
+    betSlip.forEach((item, idx) => {
+      const selectionText = item.selection === "home" 
+        ? `Vitória ${item.match.homeTeam}` 
+        : item.selection === "away" 
+          ? `Vitória ${item.match.awayTeam}` 
+          : "Empate";
+      
+      text += `${idx + 1}. ⚽ *${item.match.homeTeam} x ${item.match.awayTeam}*\n`;
+      text += `   📍 Palpite: *${selectionText}*\n`;
+      text += `   📈 Odd: @${item.odd}\n\n`;
+    });
+    
+    text += `📊 *Odd Total:* @${totalOdds}\n`;
+    text += `💰 *Stake:* R$ ${betAmount}\n`;
+    text += `🔮 *Retorno:* R$ ${(betAmount * totalOdds).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}\n\n`;
+    text += "⚠️ _Aposte com responsabilidade._";
+
+    const shareData = {
+      title: "Bilhete BetVision Pro",
+      text: text,
+      url: window.location.href
+    };
+
+    if (navigator.share) {
+      navigator.share(shareData)
+        .then(() => {
+          setHasSharedSlip(true);
+          triggerPushNotification(
+            "Compartilhamento Realizado",
+            "Bilhete enviado com sucesso utilizando o compartilhamento nativo do seu dispositivo! 🚀",
+            "info"
+          );
+          addAdminLog("BETSLIP_SHARED_NATIVELY", currentUser?.name || "SYSTEM", "success");
+          setTimeout(() => setHasSharedSlip(false), 2500);
+        })
+        .catch((err) => {
+          if (err.name !== "AbortError") {
+            console.error("Erro ao compartilhar", err);
+            // Fallback: copy to clipboard
+            navigator.clipboard.writeText(text).then(() => {
+              setHasCopiedSlip(true);
+              triggerPushNotification(
+                "Copiado para Área de Transferência",
+                "Seu bilhete foi copiado com sucesso! Compartilhe onde desejar.",
+                "info"
+              );
+              setTimeout(() => setHasCopiedSlip(false), 2500);
+            });
+          }
+        });
+    } else {
+      // Fallback: copy to clipboard
+      navigator.clipboard.writeText(text).then(() => {
+        setHasCopiedSlip(true);
+        triggerPushNotification(
+          "Copiado para Área de Transferência",
+          "Compartilhamento nativo indisponível. Bilhete de palpites copiado com sucesso!",
+          "info"
+        );
+        setTimeout(() => setHasCopiedSlip(false), 2500);
+      });
+    }
   };
 
   // Multi slip generator simulation using MultiplesService
@@ -1093,66 +1361,153 @@ export default function App() {
     );
   }
 
+  if (showSplashScreen) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen w-full bg-[#14181f] text-white font-sans p-6 z-50">
+        <div className="max-w-md w-full space-y-8 text-center animate-fade-in">
+          {/* Logo Brand with a sleek pulse gold/green glow */}
+          <div className="flex flex-col items-center gap-3">
+            <div className="w-16 h-16 bg-gradient-to-tr from-[#00D26A] to-[#00A94E] rounded-2xl flex items-center justify-center font-black text-black text-2xl shadow-[0_0_40px_rgba(0,210,106,0.3)] animate-pulse">
+              BV
+            </div>
+            <h1 className="text-3xl font-black tracking-widest text-white mt-2">
+              BETVISION<span className="text-[#00D26A]">PRO</span>
+            </h1>
+            <p className="text-[10px] uppercase tracking-widest text-neutral-450 font-bold font-mono">
+              SISTEMA COGNITIVO DE PREDIÇÕES ESPORTIVAS
+            </p>
+          </div>
+
+          {/* Progress Bar Container */}
+          <div className="space-y-3 pt-6">
+            <div className="flex justify-between items-center text-xs text-neutral-450 font-mono">
+              <span className="animate-pulse font-semibold text-[#00D26A]">IA Carregando...</span>
+              <span className="font-bold text-white">{splashProgress}%</span>
+            </div>
+            
+            {/* The actual progress bar */}
+            <div className="w-full bg-neutral-900/80 h-2 rounded-full border border-neutral-800 p-0.5 overflow-hidden">
+              <div 
+                className="bg-gradient-to-r from-[#00D26A] to-[#00A94E] h-full rounded-full transition-all duration-150 ease-out shadow-[0_0_12px_rgba(0,210,106,0.6)]" 
+                style={{ width: `${splashProgress}%` }}
+              ></div>
+            </div>
+
+            {/* Cyberpunk Progress Block Indicators [█████████░] */}
+            <div className="font-mono text-[10px] text-neutral-500 tracking-wider">
+              {"["}
+              <span className="text-[#00D26A]">
+                {"█".repeat(Math.round(splashProgress / 10))}
+              </span>
+              <span className="text-neutral-800">
+                {"░".repeat(10 - Math.round(splashProgress / 10))}
+              </span>
+              {"]"}
+            </div>
+          </div>
+
+          {/* System Scan Scrolling Log Cards */}
+          <div className="bg-[#1b212b] border border-neutral-800/80 p-4 rounded-xl text-left space-y-2.5 shadow-[0_12px_30px_rgba(0,0,0,0.35)] relative overflow-hidden min-h-[140px] flex flex-col justify-center">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-green-500/5 rounded-full blur-2xl pointer-events-none"></div>
+            <div className="text-[10px] text-neutral-450 font-mono uppercase font-bold tracking-wider flex items-center gap-2 border-b border-neutral-800 pb-1.5">
+              <span className="h-1.5 w-1.5 bg-[#00D26A] rounded-full animate-ping"></span>
+              Sincronização de Redes Neurais
+            </div>
+            <div className="space-y-1 font-mono text-[10px] leading-relaxed text-neutral-300">
+              <div className="flex items-center gap-1.5">
+                <span className="text-green-500">{splashProgress >= 15 ? "✔" : "⚡"}</span>
+                <span>Análise de base histórica: 11.000 partidas de futebol</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-green-500">{splashProgress >= 55 ? "✔" : "⚡"}</span>
+                <span>Mapeamento de probabilidades e desvios de odds (+EV)</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-green-500">{splashProgress >= 75 ? "✔" : "⚡"}</span>
+                <span>Verificação de boletins de desfalques & lesões</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-green-500">{splashProgress >= 90 ? "✔" : "⚡"}</span>
+                <span>Mapeamento de escalações prováveis e táticas</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Loading status details text */}
+          <p className="text-[11px] text-[#00D26A] font-mono h-4">
+            {splashStatusText}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex flex-col h-screen w-full bg-neutral-950 text-neutral-200 font-sans overflow-hidden">
+    <div className="flex flex-col h-screen w-full bg-[#14181f] text-neutral-200 font-sans overflow-hidden">
       
       {/* TOP NAVIGATION BAR */}
-      <header className="h-14 border-b border-neutral-800 bg-neutral-900 flex items-center justify-between px-4 md:px-6 shrink-0 z-20">
-        <div className="flex items-center gap-4 md:gap-8">
+      <header className="h-12 border-b border-neutral-800/60 bg-[#1b212b] flex items-center justify-between px-4 md:px-6 shrink-0 z-20 shadow-md">
+        <div className="flex items-center gap-4 md:gap-8 h-full">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-green-500 rounded flex items-center justify-center font-bold text-black text-sm shrink-0">BV</div>
-            <span className="text-base sm:text-xl font-bold tracking-tighter text-white">
-              BETVISION<span className="text-green-500">PRO</span>
+            <div className="w-7 h-7 bg-gradient-to-tr from-[#00D26A] to-[#00A94E] rounded flex items-center justify-center font-bold text-black text-xs shrink-0 shadow">BV</div>
+            <span className="text-xs sm:text-sm font-black tracking-widest text-white">
+              BETVISION<span className="text-[#00D26A]">PRO</span>
             </span>
           </div>
-          <nav className="hidden lg:flex gap-4 text-xs font-medium">
+          <nav className="hidden lg:flex gap-1.5 text-[11px] font-semibold h-full items-center">
             <button
               onClick={() => { setActiveTab("dashboard"); setSelectedLeague("all"); }}
-              className={`px-3 py-1.5 rounded transition-all ${
-                activeTab === "dashboard" ? "bg-green-500 text-black font-semibold" : "text-neutral-400 hover:text-white"
+              className={`px-3 py-1 rounded-md transition-all relative cursor-pointer ${
+                activeTab === "dashboard" ? "bg-green-500/10 text-[#00D26A] border border-green-500/20" : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/40"
               }`}
             >
               Dashboard IA
+              {activeTab === "dashboard" && <span className="absolute bottom-[-10px] left-1/2 -translate-x-1/2 w-8 h-0.5 bg-[#00D26A] rounded-full"></span>}
             </button>
             <button
               onClick={() => { setActiveTab("partidas"); setActiveFilter("high_confidence"); }}
-              className={`px-3 py-1.5 rounded transition-all ${
-                activeTab === "partidas" ? "bg-green-500 text-black font-semibold" : "text-neutral-400 hover:text-white"
+              className={`px-3 py-1 rounded-md transition-all relative cursor-pointer ${
+                activeTab === "partidas" ? "bg-green-500/10 text-[#00D26A] border border-green-500/20" : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/40"
               }`}
             >
               Partidas Preditas
+              {activeTab === "partidas" && <span className="absolute bottom-[-10px] left-1/2 -translate-x-1/2 w-8 h-0.5 bg-[#00D26A] rounded-full"></span>}
             </button>
             <button
               onClick={() => { setActiveTab("simulador"); }}
-              className={`px-3 py-1.5 rounded transition-all flex items-center gap-1.5 ${
-                activeTab === "simulador" ? "bg-green-500 text-black font-semibold" : "text-neutral-400 hover:text-white"
+              className={`px-3 py-1 rounded-md transition-all relative flex items-center gap-1.5 cursor-pointer ${
+                activeTab === "simulador" ? "bg-green-500/10 text-[#00D26A] border border-green-500/20" : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/40"
               }`}
             >
-              <Zap className="w-3.5 h-3.5 animate-pulse text-amber-500" /> Live Tracker
+              <Zap className="w-3 h-3 animate-pulse text-amber-500" /> Live Tracker
+              {activeTab === "simulador" && <span className="absolute bottom-[-10px] left-1/2 -translate-x-1/2 w-8 h-0.5 bg-[#00D26A] rounded-full"></span>}
             </button>
             <button
               onClick={() => { setActiveTab("smart_bets"); }}
-              className={`px-3 py-1.5 rounded transition-all flex items-center gap-1 ${
-                activeTab === "smart_bets" ? "bg-green-500 text-black font-semibold" : "text-neutral-400 hover:text-white"
+              className={`px-3 py-1 rounded-md transition-all relative flex items-center gap-1 cursor-pointer ${
+                activeTab === "smart_bets" ? "bg-green-500/10 text-[#00D26A] border border-green-500/20" : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/40"
               }`}
             >
-              <Sparkles className="w-3.5 h-3.5" /> Sugestões IA
+              <Sparkles className="w-3 h-3" /> Sugestões IA
+              {activeTab === "smart_bets" && <span className="absolute bottom-[-10px] left-1/2 -translate-x-1/2 w-8 h-0.5 bg-[#00D26A] rounded-full"></span>}
             </button>
             <button
               onClick={() => { setActiveTab("multiplas"); }}
-              className={`px-3 py-1.5 rounded transition-all ${
-                activeTab === "multiplas" ? "bg-green-500 text-black font-semibold" : "text-neutral-400 hover:text-white"
+              className={`px-3 py-1 rounded-md transition-all relative cursor-pointer ${
+                activeTab === "multiplas" ? "bg-green-500/10 text-[#00D26A] border border-green-500/20" : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/40"
               }`}
             >
               Múltiplas Assistidas
+              {activeTab === "multiplas" && <span className="absolute bottom-[-10px] left-1/2 -translate-x-1/2 w-8 h-0.5 bg-[#00D26A] rounded-full"></span>}
             </button>
             <button
               onClick={() => { setActiveTab("dashboard_ia"); }}
-              className={`px-3 py-1.5 rounded transition-all ${
-                activeTab === "dashboard_ia" ? "bg-green-500 text-black font-semibold" : "text-neutral-400 hover:text-white"
+              className={`px-3 py-1 rounded-md transition-all relative cursor-pointer ${
+                activeTab === "dashboard_ia" ? "bg-green-500/10 text-[#00D26A] border border-green-500/20" : "text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800/40"
               }`}
             >
               Estatísticas IA
+              {activeTab === "dashboard_ia" && <span className="absolute bottom-[-10px] left-1/2 -translate-x-1/2 w-8 h-0.5 bg-[#00D26A] rounded-full"></span>}
             </button>
             <button
               onClick={() => { setActiveTab("admin"); }}
@@ -1450,16 +1805,49 @@ export default function App() {
                   <span className="text-xs bg-neutral-800 px-1.5 rounded">{matches.length}</span>
                 </button>
                 <button
-                  onClick={() => setSelectedLeague("Brasileirão")}
-                  className={`w-full flex items-center justify-between px-3 py-1.5 text-xs rounded ${
+                  onClick={() => {
+                    setSelectedLeague("Brasileirão");
+                    setIsBrasileiraoOpen(!isBrasileiraoOpen);
+                  }}
+                  className={`w-full flex items-center justify-between px-3 py-1.5 text-xs rounded transition-all cursor-pointer ${
                     selectedLeague === "Brasileirão" ? "bg-neutral-800 text-white font-medium" : "text-neutral-400 hover:text-neutral-200"
                   }`}
                 >
-                  <span>Brasileirão</span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-[9px] text-neutral-500 inline-block transition-transform duration-200" style={{ transform: isBrasileiraoOpen ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
+                    Brasileirão
+                  </span>
                   <span className="text-xs bg-neutral-800 px-1.5 rounded">
                     {matches.filter(m => m.league === "Brasileirão").length}
                   </span>
                 </button>
+                {isBrasileiraoOpen && (
+                  <div className="pl-3.5 pr-1 py-1 space-y-1 border-l border-neutral-800 ml-3 animate-fade-in text-[11px] flex flex-col items-start w-full">
+                    {[
+                      "Série A",
+                      "Série B",
+                      "Copa do Brasil",
+                      "Feminino",
+                      "Sub-20"
+                    ].map((sub) => (
+                      <button
+                        key={sub}
+                        onClick={() => {
+                          setSelectedLeague("Brasileirão");
+                          triggerPushNotification(
+                            "Filtro de Campeonato",
+                            `Filtrando estatísticas avançadas do Brasileirão ${sub} via rede neural.`,
+                            "info"
+                          );
+                        }}
+                        className="w-full text-left py-0.5 text-neutral-400 hover:text-green-400 transition-colors flex justify-between items-center cursor-pointer bg-transparent border-none"
+                      >
+                        <span>• {sub}</span>
+                        <span className="text-[9px] bg-neutral-900/40 text-neutral-500 px-1 rounded">IA</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <button
                   onClick={() => setSelectedLeague("Premier League")}
                   className={`w-full flex items-center justify-between px-3 py-1.5 text-xs rounded ${
@@ -1597,201 +1985,222 @@ export default function App() {
           
           {/* DASHBOARD TAB VIEW */}
           {activeTab === "dashboard" && (
-            <div className="p-4 space-y-4">
+            <div className="p-4 space-y-6">
               
               {/* DYNAMIC ANIMATED HEADER WITH DUAL THEME CONTRAST & VIDEOS */}
               <DashboardAnimatedHeader />
-              
-              {/* MOBILE HORIZONTAL FILTERS & LEAGUES (hidden on desktop) */}
-              <div className="md:hidden space-y-3 pb-3 border-b border-neutral-900">
-                {/* Filters IA */}
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold flex items-center gap-1">
-                    <Filter className="w-2.5 h-2.5 text-green-500" /> Filtros IA
-                  </span>
-                  <div className="flex gap-1.5 overflow-x-auto py-0.5 scrollbar-none">
-                    <button
-                      onClick={() => setActiveFilter("high_confidence")}
-                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border ${
-                        activeFilter === "high_confidence"
-                          ? "bg-green-500 text-black border-green-500 font-bold"
-                          : "bg-neutral-900 text-neutral-400 border-neutral-800"
-                      }`}
-                    >
-                      Maior Confiança
-                    </button>
-                    <button
-                      onClick={() => setActiveFilter("favorites")}
-                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border ${
-                        activeFilter === "favorites"
-                          ? "bg-green-500 text-black border-green-500 font-bold"
-                          : "bg-neutral-900 text-neutral-400 border-neutral-800"
-                      }`}
-                    >
-                      Favoritos
-                    </button>
-                    <button
-                      onClick={() => setActiveFilter("over_gols")}
-                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border ${
-                        activeFilter === "over_gols"
-                          ? "bg-green-500 text-black border-green-500 font-bold"
-                          : "bg-neutral-900 text-neutral-400 border-neutral-800"
-                      }`}
-                    >
-                      Over Gols
-                    </button>
-                    <button
-                      onClick={() => setActiveFilter("btts")}
-                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border ${
-                        activeFilter === "btts"
-                          ? "bg-green-500 text-black border-green-500 font-bold"
-                          : "bg-neutral-900 text-neutral-400 border-neutral-800"
-                      }`}
-                    >
-                      Ambas Marcam
-                    </button>
-                    <button
-                      onClick={() => setActiveFilter("vip")}
-                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border ${
-                        activeFilter === "vip"
-                          ? "bg-amber-500 text-black border-amber-500 font-bold"
-                          : "bg-neutral-900 text-neutral-400 border-neutral-800"
-                      }`}
-                    >
-                      ★ VIP Exclusivo
-                    </button>
-                  </div>
-                </div>
 
-                {/* Filtros Pessoais Mobile */}
-                {personalFilters.length > 0 && (
-                  <div className="flex flex-col gap-1.5">
-                    <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold flex items-center gap-1">
-                      <Star className="w-2.5 h-2.5 text-yellow-500" /> Filtros Pessoais
-                    </span>
-                    <div className="flex gap-1.5 overflow-x-auto py-0.5 scrollbar-none">
-                      {personalFilters.map((f) => {
-                        const isActive = selectedLeague === f.league && activeFilter === f.filter;
-                        return (
-                          <button
-                            key={f.id}
-                            onClick={() => {
-                              setSelectedLeague(f.league);
-                              setActiveFilter(f.filter);
-                            }}
-                            className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border flex items-center gap-1.5 ${
-                              isActive
-                                ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/30 font-bold"
-                                : "bg-neutral-900 text-neutral-400 border-neutral-800"
-                            }`}
-                          >
-                            <span>{f.name}</span>
-                            <span className="text-[8px] opacity-65 font-mono">({getFilterCombinationLabel(f)})</span>
-                          </button>
-                        );
-                      })}
+              {/* HIERARQUIA VISUAL - TOPO: METRICAS E SALDO */}
+              <div className="space-y-2">
+                <h3 className="text-[10px] uppercase text-neutral-400 font-extrabold tracking-widest flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 bg-green-500 rounded-full"></span>
+                  1. Desempenho Global & Carteira (Topo)
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {/* Card 1: Assertividade */}
+                  <div className="bg-neutral-900/95 p-4 rounded-xl border border-neutral-800 relative overflow-hidden group hover:border-green-500/30 transition-all shadow-lg">
+                    <div className="text-[10px] uppercase text-neutral-500 font-bold tracking-widest mb-1 flex justify-between">
+                      <span>Assertividade IA</span>
+                      <span className="text-green-500 font-mono font-bold">+1.2%</span>
+                    </div>
+                    <div className="text-2xl font-extrabold text-green-500 tracking-tight flex items-baseline gap-1">
+                      89.4%
+                      <span className="text-[10px] text-neutral-400 font-normal">taxa global</span>
+                    </div>
+                    <p className="text-[10px] text-neutral-400 mt-1">Alta consistência baseada em modelos matemáticos refinados.</p>
+                    <div className="w-full bg-neutral-800 h-1 rounded-full mt-3 overflow-hidden">
+                      <div className="bg-green-500 h-1 rounded-full" style={{ width: "89.4%" }}></div>
                     </div>
                   </div>
-                )}
 
-                {/* Campeonatos */}
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-[9px] uppercase tracking-widest text-neutral-500 font-bold flex items-center gap-1">
-                    <Award className="w-2.5 h-2.5 text-amber-500" /> Campeonatos
-                  </span>
-                  <div className="flex gap-1.5 overflow-x-auto py-0.5 scrollbar-none">
-                    {[
-                      { id: "all", name: "Todos" },
-                      { id: "Brasileirão", name: "Brasileirão" },
-                      { id: "Premier League", name: "Premier League" },
-                      { id: "Libertadores", name: "Libertadores", vip: true },
-                      { id: "La Liga", name: "La Liga", live: true },
-                    ].map((league) => (
+                  {/* Card 2: ROI */}
+                  <div className="bg-neutral-900/95 p-4 rounded-xl border border-neutral-800 hover:border-green-500/30 transition-all shadow-lg">
+                    <div className="text-[10px] uppercase text-neutral-500 font-bold tracking-widest mb-1 flex justify-between">
+                      <span>Retorno s/ Investimento</span>
+                      <span className="text-green-400 font-bold text-[10px] font-mono">Consistente</span>
+                    </div>
+                    <div className="text-2xl font-extrabold text-white tracking-tight">
+                      +24.2%
+                      <span className="text-[10px] text-neutral-400 font-normal ml-1">Média (30d)</span>
+                    </div>
+                    <p className="text-[10px] text-neutral-400 mt-1">Valor esperado positivo (+EV) sustentado em longo prazo.</p>
+                    <div className="w-full bg-neutral-800 h-1 rounded-full mt-3 overflow-hidden">
+                      <div className="bg-green-400 h-1 rounded-full" style={{ width: "74%" }}></div>
+                    </div>
+                  </div>
+
+                  {/* Card 3: Lucro Estimado */}
+                  <div className="bg-neutral-900/95 p-4 rounded-xl border border-neutral-800 hover:border-green-500/30 transition-all shadow-lg">
+                    <div className="text-[10px] uppercase text-neutral-500 font-bold tracking-widest mb-1">Lucro Estimado</div>
+                    <div className="text-2xl font-extrabold text-white tracking-tight font-mono">
+                      R$ 4.821,00
+                    </div>
+                    <p className="text-[10px] text-neutral-400 mt-1">Projeção estimada para o fechamento do período mensal.</p>
+                    <div className="text-[9px] text-neutral-400 mt-3 flex items-center gap-1">
+                      <CheckCircle className="w-3.5 h-3.5 text-green-500" /> Projeção baseada em aportes padrão de R$ 500
+                    </div>
+                  </div>
+
+                  {/* Card 4: Saldo Disponível (Com Controles Simulados interativos) */}
+                  <div className="bg-neutral-900/95 p-4 rounded-xl border border-neutral-800 hover:border-green-500/30 transition-all shadow-lg relative">
+                    <div className="text-[10px] uppercase text-neutral-500 font-bold tracking-widest mb-1 flex justify-between">
+                      <span>Saldo em Banca</span>
+                      {riskLimits.enabledMinBankroll && (
+                        <span className="text-[9px] bg-red-500/10 text-red-400 border border-red-500/20 px-1.5 rounded font-bold font-mono">
+                          Mínimo: R$ {riskLimits.minBankroll}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-2xl font-extrabold text-white tracking-tight font-mono">
+                      R$ {userBalance.toFixed(2)}
+                    </div>
+                    
+                    {/* Interactive Balance Simulation Controls */}
+                    <div className="mt-2.5 flex items-center gap-1.5 bg-neutral-950 p-1.5 rounded-lg border border-neutral-850">
+                      <span className="text-[8px] uppercase tracking-wider text-neutral-500 font-bold block flex-1">Simular banca:</span>
                       <button
-                        key={league.id}
-                        onClick={() => setSelectedLeague(league.id)}
-                        className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border flex items-center gap-1 ${
-                          selectedLeague === league.id
-                            ? "bg-neutral-200 text-neutral-950 border-neutral-200 font-bold"
-                            : "bg-neutral-900 text-neutral-400 border-neutral-800"
-                        }`}
+                        onClick={() => setUserBalance((prev) => parseFloat((prev - 50).toFixed(2)))}
+                        className="bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[10px] font-bold px-2 py-0.5 rounded border border-red-500/20 transition-colors"
+                        title="Sacar / Reduzir R$ 50 para simular risco"
                       >
-                        {league.name}
-                        {league.vip && <span className="text-[8px] bg-amber-500/10 text-amber-400 px-1 rounded font-bold">VIP</span>}
-                        {league.live && <span className="text-[8px] bg-red-500/10 text-red-500 px-1 rounded font-bold animate-pulse">LIVE</span>}
+                        - R$ 50
                       </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Mini ROI Simulator Tool for Mobile */}
-                <div className="bg-neutral-900/40 border border-neutral-850 rounded-lg p-3 text-[11px] space-y-1.5">
-                  <div className="flex justify-between items-center">
-                    <span className="font-bold text-neutral-300 flex items-center gap-1">
-                      <TrendingUp className="w-3 h-3 text-green-500" /> Simulador de ROI
-                    </span>
-                    <span className="text-[10px] text-green-400 font-bold font-mono">Retorno 30d: +R$ {Math.round(simulatedInvestment * 0.242)}</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="range"
-                      min="100"
-                      max="5000"
-                      step="100"
-                      value={simulatedInvestment}
-                      onChange={(e) => setSimulatedInvestment(parseInt(e.target.value))}
-                      className="flex-1 h-1 bg-neutral-750 rounded-lg appearance-none cursor-pointer accent-green-500"
-                    />
-                    <span className="text-[10px] text-white font-mono shrink-0">Aporte: R$ {simulatedInvestment}</span>
+                      <button
+                        onClick={() => setUserBalance((prev) => parseFloat((prev + 50).toFixed(2)))}
+                        className="bg-green-500/10 hover:bg-green-500/20 text-green-400 text-[10px] font-bold px-2 py-0.5 rounded border border-green-500/20 transition-colors"
+                        title="Depositar / Aumentar R$ 50"
+                      >
+                        + R$ 50
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-              
-              {/* STATS STRIP */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div className="bg-neutral-900 p-3 rounded-lg border border-neutral-800 relative overflow-hidden group hover:border-green-500/30 transition-all">
-                  <div className="text-[10px] uppercase text-neutral-500 font-bold tracking-widest mb-1 flex justify-between">
-                    <span>Precisão IA</span>
-                    <span className="text-green-500 font-mono">+1.2%</span>
-                  </div>
-                  <div className="text-xl font-bold text-green-500 tracking-tight flex items-baseline gap-1">
-                    89.4%
-                    <span className="text-[10px] text-neutral-400 font-normal">taxa global</span>
-                  </div>
-                  <div className="w-full bg-neutral-800 h-1 rounded-full mt-2 overflow-hidden">
-                    <div className="bg-green-500 h-1 rounded-full" style={{ width: "89.4%" }}></div>
-                  </div>
-                </div>
 
-                <div className="bg-neutral-900 p-3 rounded-lg border border-neutral-800 hover:border-green-500/30 transition-all">
-                  <div className="text-[10px] uppercase text-neutral-500 font-bold tracking-widest mb-1">ROI Média (30d)</div>
-                  <div className="text-xl font-bold text-white tracking-tight flex items-baseline gap-1">
-                    +24.2%
-                    <span className="text-[10px] text-green-400 font-normal">Consistente</span>
-                  </div>
-                  <div className="w-full bg-neutral-800 h-1 rounded-full mt-2 overflow-hidden">
-                    <div className="bg-green-400 h-1 rounded-full" style={{ width: "74%" }}></div>
-                  </div>
-                </div>
+              {/* CENTRAL DE INTELIGÊNCIA ARTIFICIAL - COPILOT (BETVISION AI) */}
+              <div className="bg-gradient-to-r from-[#1c222e] via-[#12161f] to-[#1a1f29] border border-neutral-850 rounded-2xl p-5 md:p-6 shadow-[0_16px_40px_rgba(0,0,0,0.45)] relative overflow-hidden group">
+                {/* Background radial glow */}
+                <div className="absolute top-0 right-0 w-80 h-80 bg-[#00D26A]/5 rounded-full blur-[100px] pointer-events-none group-hover:bg-[#00D26A]/8 transition-all duration-700"></div>
+                <div className="absolute -bottom-20 -left-20 w-60 h-60 bg-amber-500/5 rounded-full blur-[80px] pointer-events-none"></div>
 
-                <div className="bg-neutral-900 p-3 rounded-lg border border-neutral-800 hover:border-green-500/30 transition-all">
-                  <div className="text-[10px] uppercase text-neutral-500 font-bold tracking-widest mb-1">Lucro Estimado Mensal</div>
-                  <div className="text-xl font-bold text-white tracking-tight font-mono">
-                    R$ 4.821,00
-                  </div>
-                  <div className="text-[9px] text-neutral-400 mt-2 flex items-center gap-1">
-                    <CheckCircle className="w-3 h-3 text-green-500" /> Atualizado há 10m
-                  </div>
-                </div>
+                <div className="relative flex flex-col xl:flex-row gap-5 items-start justify-between">
+                  <div className="space-y-3.5 max-w-2xl">
+                    <div className="flex items-center gap-2">
+                      <span className="relative flex h-2.5 w-2.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00D26A] opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-[#00D26A]"></span>
+                      </span>
+                      <h4 className="text-xs font-black tracking-widest text-[#00D26A] uppercase font-mono flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4 text-[#00D26A]" /> BetVision AI Copilot
+                      </h4>
+                      <span className="text-[10px] bg-neutral-800 border border-neutral-700 text-neutral-400 px-2.5 py-0.5 rounded-full font-bold font-mono">
+                        v2.5 Live
+                      </span>
+                    </div>
 
-                <div className="bg-neutral-900 p-3 rounded-lg border border-neutral-800 hover:border-green-500/30 transition-all relative">
-                  <div className="text-[10px] uppercase text-neutral-500 font-bold tracking-widest mb-1">Acertos Hoje</div>
-                  <div className="text-xl font-bold text-green-400 tracking-tight">
-                    14/16
+                    <div className="space-y-1">
+                      <h3 className="text-base font-extrabold text-white tracking-tight leading-snug">
+                        Olá, {currentUser?.name || "Apostador"}. Bom dia!
+                      </h3>
+                      <p className="text-xs text-neutral-300 leading-relaxed max-w-xl">
+                        Analisei <span className="text-white font-extrabold font-mono">427 partidas</span> das próximas 48 horas nas principais ligas internacionais. Identifiquei anomalias de valor estatístico e consolidei os seguintes pareceres:
+                      </p>
+                    </div>
+
+                    {/* Status grid */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1.5">
+                      <div className="bg-[#131722]/60 border border-neutral-800/40 rounded-xl p-3 flex flex-col justify-between hover:border-neutral-700/60 transition-all">
+                        <span className="text-[9px] uppercase font-black tracking-wider text-neutral-500 font-mono">Alta Confiança</span>
+                        <div className="flex items-baseline gap-1 mt-1">
+                          <span className="text-base font-black text-emerald-400 font-mono">12</span>
+                          <span className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider font-mono">&gt;90%</span>
+                        </div>
+                      </div>
+                      <div className="bg-[#131722]/60 border border-neutral-800/40 rounded-xl p-3 flex flex-col justify-between hover:border-neutral-700/60 transition-all">
+                        <span className="text-[9px] uppercase font-black tracking-wider text-neutral-500 font-mono">Valor Positivo</span>
+                        <div className="flex items-baseline gap-1 mt-1">
+                          <span className="text-base font-black text-amber-400 font-mono">18</span>
+                          <span className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider font-mono">+EV</span>
+                        </div>
+                      </div>
+                      <div className="bg-[#131722]/60 border border-neutral-800/40 rounded-xl p-3 flex flex-col justify-between hover:border-neutral-700/60 transition-all">
+                        <span className="text-[9px] uppercase font-black tracking-wider text-neutral-500 font-mono">Reduzir / Evitar</span>
+                        <div className="flex items-baseline gap-1 mt-1">
+                          <span className="text-base font-black text-red-400 font-mono">9</span>
+                          <span className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider font-mono">Risco</span>
+                        </div>
+                      </div>
+                      <div className="bg-[#131722]/60 border border-neutral-800/40 rounded-xl p-3 flex flex-col justify-between hover:border-neutral-700/60 transition-all relative overflow-hidden">
+                        <div className="absolute top-0 right-0 bg-amber-500 text-black text-[7px] font-black tracking-widest px-1 py-0.5 rounded-bl uppercase">VIP</div>
+                        <span className="text-[9px] uppercase font-black tracking-wider text-neutral-500 font-mono">Exclusivo VIP</span>
+                        <div className="flex items-baseline gap-1 mt-1">
+                          <span className="text-base font-black text-purple-400 font-mono">5</span>
+                          <span className="text-[10px] text-neutral-400 font-bold uppercase tracking-wider font-mono">Premium</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="text-[10px] text-neutral-500 font-mono flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-neutral-500" />
+                      Última análise de redes neurais concluída há 2 minutos.
+                    </div>
                   </div>
-                  <div className="w-full bg-neutral-800 h-1.5 rounded-full mt-1.5 overflow-hidden flex">
-                    <div className="bg-green-500 h-full" style={{ width: "87.5%" }}></div>
-                    <div className="bg-red-500 h-full" style={{ width: "12.5%" }}></div>
+
+                  {/* Interactive Buttons block */}
+                  <div className="w-full xl:w-auto xl:self-stretch flex flex-col justify-center gap-2.5 shrink-0 pt-3 xl:pt-0">
+                    <button
+                      onClick={() => {
+                        // Generate smart bet slip
+                        const topMatches = matches.filter(m => m.iaConfidence >= 88).slice(0, 3);
+                        if (topMatches.length > 0) {
+                          const newItems = topMatches.map(m => ({
+                            match: m,
+                            selection: "home" as const,
+                            odd: m.odds.home
+                          }));
+                          setBetSlip(newItems);
+                          // Notification
+                          setNotifications(prev => [{
+                            id: "smart_" + Date.now(),
+                            title: "Múltipla IA Gerada! 🚀",
+                            message: `${topMatches.length} seleções com excelente valor esperado (+EV) inseridas no seu bilhete.`,
+                            timestamp: "Agora",
+                            isRead: false,
+                            type: "success"
+                          }, ...prev]);
+                        }
+                      }}
+                      className="w-full xl:w-56 bg-gradient-to-r from-emerald-500 to-[#00D26A] hover:brightness-110 text-neutral-950 font-black py-2.5 px-4 rounded-xl text-xs uppercase tracking-wider transition-all duration-300 active:scale-95 shadow-[0_4px_20px_rgba(0,210,106,0.25)] hover:shadow-[0_4px_30px_rgba(0,210,106,0.4)] flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Sparkles className="w-4 h-4 text-neutral-950" />
+                      Gerar Bilhete Inteligente
+                    </button>
+                    <button
+                      onClick={() => {
+                        // Switch tab to Suggestões IA
+                        setActiveTab("smart_bets");
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }}
+                      className="w-full xl:w-56 bg-neutral-900 hover:bg-neutral-800 text-white border border-neutral-800/80 hover:border-neutral-700 py-2.5 px-4 rounded-xl text-xs font-bold transition-all duration-300 active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <HelpCircle className="w-4 h-4 text-[#00D26A]" />
+                      Conversar com a IA
+                    </button>
+                    <button
+                      onClick={() => {
+                        // Set filter to High Confidence
+                        setActiveFilter("high_confidence");
+                        // Scroll to the next partidas
+                        const el = document.getElementById("proximas-partidas");
+                        if (el) {
+                          el.scrollIntoView({ behavior: "smooth" });
+                        }
+                      }}
+                      className="w-full xl:w-56 bg-neutral-900 hover:bg-neutral-800 text-white border border-neutral-800/80 hover:border-neutral-700 py-2.5 px-4 rounded-xl text-xs font-bold transition-all duration-300 active:scale-95 flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <TrendingUp className="w-4 h-4 text-amber-500" />
+                      Ver Melhores Oportunidades
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1828,33 +2237,74 @@ export default function App() {
                 </div>
               )}
 
-
-
               {/* FEATURED MATCH LIST VIEW */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-xs font-bold text-neutral-400 uppercase tracking-widest flex items-center gap-2">
-                    Análises de Alta Precisão 
-                    <span className="text-[9px] bg-green-500/15 text-green-500 px-2 py-0.5 rounded font-bold">MOTOR PREDITIVO ATIVO</span>
-                  </h2>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Pesquisar times ou campeonatos..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value.toLowerCase())}
-                      className="bg-neutral-900 border border-neutral-800 rounded px-2.5 py-1 text-xs text-neutral-200 focus:outline-none focus:border-green-500 w-48 md:w-64"
-                    />
+              <div id="proximas-partidas" className="space-y-3">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-2 border-b border-neutral-850">
+                  <div className="space-y-0.5">
+                    <h3 className="text-[10px] uppercase text-neutral-400 font-extrabold tracking-widest flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 bg-green-500 rounded-full"></span>
+                      2. Próximas Partidas em Destaque
+                    </h3>
+                    <p className="text-[11px] text-neutral-500">Selecione resultados para copiar diretamente para o seu bilhete ativo.</p>
                   </div>
+                  
+                  {/* Search and interactive league filter */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 text-neutral-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Pesquisar times ou ligas..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value.toLowerCase())}
+                        className="bg-neutral-900 border border-neutral-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-neutral-200 focus:outline-none focus:border-green-500 w-48 sm:w-60"
+                      />
+                    </div>
+                    <select
+                      value={selectedLeague}
+                      onChange={(e) => setSelectedLeague(e.target.value)}
+                      className="bg-neutral-900 border border-neutral-800 text-xs rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-green-500 text-neutral-300 font-semibold"
+                    >
+                      <option value="all">Todas as Ligas</option>
+                      <option value="Brasileirão">Brasileirão</option>
+                      <option value="Premier League">Premier League</option>
+                      <option value="Libertadores">Libertadores</option>
+                      <option value="La Liga">La Liga</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Sub-Filters for fast categorizing */}
+                <div className="flex gap-1.5 overflow-x-auto pb-1 scrollbar-none">
+                  {[
+                    { id: "high_confidence", name: "Maior Confiança (>88%)" },
+                    { id: "favorites", name: "Favoritos (<1.60)" },
+                    { id: "over_gols", name: "Over Gols" },
+                    { id: "btts", name: "Ambas Marcam" },
+                    { id: "vip", name: "★ VIP Exclusivo" },
+                    { id: "all", name: "Ver Todas" }
+                  ].map((filter) => (
+                    <button
+                      key={filter.id}
+                      onClick={() => setActiveFilter(filter.id)}
+                      className={`px-3 py-1.5 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all border shrink-0 ${
+                        activeFilter === filter.id
+                          ? "bg-green-500 text-black border-green-500 font-extrabold"
+                          : "bg-neutral-900/60 text-neutral-400 border-neutral-800 hover:border-neutral-700"
+                      }`}
+                    >
+                      {filter.name}
+                    </button>
+                  ))}
                 </div>
 
                 {/* Grid layout for match list and detail drawer */}
                 <div className="flex flex-col xl:flex-row gap-4">
                   
                   {/* Match Cards List */}
-                  <div className="flex-1 space-y-3">
+                  <div className="flex-1 space-y-4">
                     {filteredMatches.length === 0 ? (
-                      <div className="bg-neutral-900 border border-neutral-800 rounded-lg p-8 text-center text-neutral-400 text-xs">
+                      <div className="bg-[#1b212b] border border-neutral-800/80 rounded-2xl p-10 text-center text-neutral-400 text-xs shadow-inner">
                         Nenhuma partida predita corresponde aos filtros selecionados.
                       </div>
                     ) : (
@@ -1866,37 +2316,50 @@ export default function App() {
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
                             transition={{ duration: 0.35, ease: "easeOut", delay: Math.min(index * 0.05, 0.4) }}
-                            className={`bg-neutral-900 border ${
-                              selectedMatch?.id === match.id ? "border-green-500" : "border-neutral-800 hover:border-neutral-700"
-                            } rounded-lg p-3.5 flex flex-col md:flex-row gap-4 relative overflow-hidden transition-all`}
+                            whileHover={{ y: -5, scale: 1.006 }}
+                            className={`bg-gradient-to-br from-[#1c222e] to-[#12161f] border ${
+                              selectedMatch?.id === match.id 
+                                ? "border-[#00D26A] shadow-[0_16px_44px_rgba(0,210,106,0.14)]" 
+                                : "border-neutral-800/90 hover:border-neutral-700 shadow-[0_12px_36px_rgba(0,0,0,0.4)]"
+                            } rounded-2xl p-5 md:p-6 flex flex-col md:flex-row gap-6 relative overflow-hidden transition-all duration-300 ease-out`}
                           >
-                            {/* VIP Locked overlay */}
                             {isLocked && (
-                              <div className="absolute inset-0 bg-neutral-950/85 backdrop-blur-xs flex items-center justify-center z-10 p-4">
-                                <div className="text-center">
-                                  <div className="flex justify-center mb-1">
-                                    <Lock className="w-5 h-5 text-amber-500 animate-bounce" />
+                              <div className="absolute inset-0 bg-gradient-to-br from-[#12161f]/98 via-[#1c222e]/99 to-[#12161f]/98 backdrop-blur-[3px] flex items-center justify-center z-20 p-5">
+                                <div className="text-center space-y-4 max-w-xs animate-fade-in">
+                                  <div className="flex items-center justify-center gap-1.5 text-amber-500 text-xs drop-shadow-[0_0_8px_rgba(245,158,11,0.5)] font-bold">
+                                    ★ ★ ★ ★ ★ <span className="text-amber-400 font-black ml-1.5 text-[11px] tracking-widest">IA PREMIUM PRO</span>
                                   </div>
-                                  <p className="text-amber-400 font-bold text-xs uppercase tracking-wider">Conteúdo VIP Exclusivo</p>
-                                  <p className="text-[10px] text-neutral-400 mb-2">Desbloqueie análises matemáticas com probabilidade estendida</p>
+                                  <div className="space-y-1">
+                                    <p className="text-neutral-300 font-extrabold text-xs uppercase tracking-widest">Predição Exclusiva</p>
+                                    <div className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-amber-300 to-yellow-500 drop-shadow-[0_0_12px_rgba(245,158,11,0.45)] font-mono">
+                                      {match.iaConfidence}%
+                                    </div>
+                                    <p className="text-[10px] text-neutral-400 font-semibold font-mono">
+                                      Valor Esperado: <span className="text-amber-400 font-extrabold">+{((match.odds.home + match.odds.away) * 3.5).toFixed(1)}% (+EV)</span>
+                                    </p>
+                                  </div>
+                                  <p className="text-[10px] text-neutral-400 leading-relaxed px-5">
+                                    Acesse palpites de alta assertividade gerados por redes neurais exclusivas.
+                                  </p>
                                   <button
                                     onClick={() => setShowVIPModal(true)}
-                                    className="bg-amber-500 hover:bg-amber-400 text-black font-bold text-[10px] px-3 py-1 rounded-full transition-all"
+                                    className="w-full py-2.5 px-6 rounded-full font-black text-[10px] uppercase tracking-widest text-black bg-gradient-to-r from-yellow-500 via-amber-400 to-yellow-600 hover:brightness-110 active:scale-95 transition-all shadow-[0_0_20px_rgba(245,158,11,0.45)] hover:shadow-[0_0_30px_rgba(245,158,11,0.65)]"
                                   >
-                                    ASSINAR PREMIUM VIP
+                                    Desbloquear Palpite VIP
                                   </button>
                                 </div>
                               </div>
                             )}
 
-                            {/* Left part: Teams & Header */}
-                            <div className="w-full md:w-1/4 shrink-0 border-b md:border-b-0 md:border-r border-neutral-800 pb-3 md:pb-0 md:pr-4 flex flex-col justify-between">
+                            {/* Left part: Teams with beautiful Club Shields */}
+                            <div className="w-full md:w-5/12 lg:w-4/12 shrink-0 border-b md:border-b-0 md:border-r border-neutral-800/80 pb-5 md:pb-0 md:pr-6 flex flex-col justify-between space-y-4">
                               <div>
-                                <div className="text-[9px] text-neutral-400 font-mono flex items-center justify-between gap-1.5 mb-2">
-                                  <div className="flex items-center gap-1.5">
+                                <div className="text-[10px] text-neutral-400 font-mono flex items-center justify-between gap-2 mb-3.5">
+                                  <div className="flex items-center gap-2">
                                     <LeagueBadge league={match.league} isLive={match.isLive} />
-                                    <span>•</span>
-                                    <span className={match.isLive ? "text-green-500 font-bold animate-pulse" : ""}>
+                                    <span className="text-neutral-750">•</span>
+                                    <span className={`font-mono text-[10px] ${match.isLive ? "text-[#00D26A] font-black animate-pulse flex items-center gap-1" : "text-neutral-450 font-semibold"}`}>
+                                      {match.isLive && <span className="w-1.5 h-1.5 bg-[#00D26A] rounded-full inline-block animate-ping"></span>}
                                       {match.isLive ? `LIVE ${match.liveMinute}'` : `${match.date}, ${match.time}`}
                                     </span>
                                   </div>
@@ -1905,102 +2368,126 @@ export default function App() {
                                       e.stopPropagation();
                                       toggleFavorite(match.id);
                                     }}
-                                    className="text-neutral-500 hover:text-amber-400 p-1 transition-colors relative z-20"
+                                    className="text-neutral-500 hover:text-amber-400 p-2 rounded-full hover:bg-neutral-800/40 transition-all active:scale-90 relative z-20"
                                     title={match.isFavorite ? "Remover dos Favoritos" : "Adicionar aos Favoritos"}
                                   >
-                                    <Star className={`w-3.5 h-3.5 ${match.isFavorite ? "fill-amber-400 text-amber-400" : ""}`} />
+                                    <Star className={`w-4 h-4 ${match.isFavorite ? "fill-amber-400 text-amber-400" : ""}`} />
                                   </button>
                                 </div>
-                                <div className="space-y-1.5">
-                                  <div className="flex items-center justify-between font-bold text-xs text-white">
-                                    <span>{match.homeTeam}</span>
-                                    <span className="text-[10px] bg-neutral-800 px-1 rounded text-neutral-400">H</span>
+
+                                {/* Club Shields & Custom Labels replacing initials */}
+                                <div className="space-y-3.5 pt-1">
+                                  <div className="flex items-center justify-between gap-2 text-xs text-white">
+                                    <div className="flex items-center gap-2.5 truncate">
+                                      <TeamShield teamName={match.homeTeam} size="sm" />
+                                      <span className="font-extrabold tracking-tight text-white/95 text-[13px] truncate">{match.homeTeam}</span>
+                                    </div>
+                                    <span className="text-[9px] bg-neutral-900/60 border border-neutral-800/40 text-neutral-450 px-2 py-0.5 rounded-full font-mono font-bold shrink-0">MANDANTE</span>
                                   </div>
-                                  <div className="flex items-center justify-between font-bold text-xs text-white">
-                                    <span>{match.awayTeam}</span>
-                                    <span className="text-[10px] bg-neutral-800 px-1 rounded text-neutral-400">A</span>
+                                  <div className="flex items-center justify-between gap-2 text-xs text-white">
+                                    <div className="flex items-center gap-2.5 truncate">
+                                      <TeamShield teamName={match.awayTeam} size="sm" />
+                                      <span className="font-extrabold tracking-tight text-white/95 text-[13px] truncate">{match.awayTeam}</span>
+                                    </div>
+                                    <span className="text-[9px] bg-neutral-900/60 border border-neutral-800/40 text-neutral-450 px-2 py-0.5 rounded-full font-mono font-bold shrink-0">VISITANTE</span>
                                   </div>
                                 </div>
                               </div>
-                              <div className="mt-3 flex gap-1 items-center">
-                                <span className="text-[9px] text-neutral-500 uppercase font-mono">IA Confiabilidade:</span>
-                                <span className="text-[10px] text-amber-400 font-mono font-bold">{match.iaConfidence}%</span>
+
+                              {/* Technical Instrument IA Block */}
+                              <div className="flex flex-col gap-1.5 bg-[#131722]/60 p-2.5 rounded-xl border border-neutral-800/50">
+                                <div className="flex justify-between items-center text-[10px] font-mono font-bold tracking-wider text-neutral-400">
+                                  <span className="flex items-center gap-1.5 text-neutral-350">
+                                    <span className="relative flex h-1.5 w-1.5 shrink-0">
+                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00D26A] opacity-75"></span>
+                                      <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#00D26A]"></span>
+                                    </span>
+                                    PREDIÇÃO DA IA
+                                  </span>
+                                  <span className="text-[#00D26A] font-extrabold font-mono text-[11px]">{match.iaConfidence}% CONFIDENCIALIDADE</span>
+                                </div>
+                                <div className="relative w-full bg-neutral-900 h-2 rounded-full overflow-hidden p-0.5 border border-neutral-800/60">
+                                  <div 
+                                    className="bg-gradient-to-r from-emerald-500 via-[#00D26A] to-[#00A94E] h-full rounded-full transition-all duration-500 ease-out shadow-[0_0_12px_rgba(0,210,106,0.6)]" 
+                                    style={{ width: `${match.iaConfidence}%` }}
+                                  ></div>
+                                </div>
                               </div>
                             </div>
 
                             {/* Right part: Predict & Actions */}
-                            <div className="flex-1 flex flex-col justify-between">
+                            <div className="flex-1 flex flex-col justify-between space-y-5">
                               
                               {/* Probabilities strip */}
-                              <div className="grid grid-cols-3 gap-1.5 mb-3 text-center">
+                              <div className="grid grid-cols-3 gap-3.5 text-center">
                                 <button
                                   onClick={() => addToBetSlip(match, "home", match.odds.home)}
-                                  className="bg-neutral-800/60 hover:bg-neutral-800 p-1.5 rounded text-left px-2 border border-neutral-800 hover:border-neutral-700 transition-all flex flex-col"
+                                  className="bg-[#131722]/50 hover:bg-[#1b2230] border border-neutral-800/60 hover:border-neutral-600 p-3 rounded-2xl transition-all duration-200 flex flex-col items-center justify-between gap-1 cursor-pointer active:scale-95 group/odd"
                                 >
-                                  <span className="text-[9px] text-neutral-500 uppercase">1 ({match.homeTeam})</span>
-                                  <div className="flex justify-between items-baseline mt-0.5">
-                                    <span className="text-xs font-mono font-bold text-neutral-200">{match.odds.home}</span>
-                                    <span className="text-[10px] text-green-500 font-mono">{match.probabilities.home}%</span>
+                                  <span className="text-[9.5px] text-neutral-450 uppercase font-mono font-black tracking-widest text-center truncate w-full group-hover/odd:text-neutral-300">1 ({match.homeTeam.substring(0,3)})</span>
+                                  <div className="flex flex-col sm:flex-row justify-between items-center w-full mt-1.5 gap-1 pt-1 border-t border-neutral-800/30">
+                                    <span className="text-sm font-black font-mono text-white group-hover/odd:text-[#00D26A] transition-colors">@{match.odds.home}</span>
+                                    <span className="text-[10px] text-green-500 font-mono font-extrabold bg-[#00D26A]/5 px-2 py-0.5 rounded-full border border-[#00D26A]/10">{match.probabilities.home}%</span>
                                   </div>
                                 </button>
                                 <button
                                   onClick={() => addToBetSlip(match, "draw", match.odds.draw)}
-                                  className="bg-neutral-800/60 hover:bg-neutral-800 p-1.5 rounded text-left px-2 border border-neutral-800 hover:border-neutral-700 transition-all flex flex-col"
+                                  className="bg-[#131722]/50 hover:bg-[#1b2230] border border-neutral-800/60 hover:border-neutral-600 p-3 rounded-2xl transition-all duration-200 flex flex-col items-center justify-between gap-1 cursor-pointer active:scale-95 group/odd"
                                 >
-                                  <span className="text-[9px] text-neutral-500 uppercase">X (Empate)</span>
-                                  <div className="flex justify-between items-baseline mt-0.5">
-                                    <span className="text-xs font-mono font-bold text-neutral-200">{match.odds.draw}</span>
-                                    <span className="text-[10px] text-neutral-400 font-mono">{match.probabilities.draw}%</span>
+                                  <span className="text-[9.5px] text-neutral-450 uppercase font-mono font-black tracking-widest text-center truncate w-full group-hover/odd:text-neutral-300">X (Empate)</span>
+                                  <div className="flex flex-col sm:flex-row justify-between items-center w-full mt-1.5 gap-1 pt-1 border-t border-neutral-800/30">
+                                    <span className="text-sm font-black font-mono text-white group-hover/odd:text-white transition-colors">@{match.odds.draw}</span>
+                                    <span className="text-[10px] text-neutral-300 font-mono font-extrabold bg-neutral-900 px-2 py-0.5 rounded-full border border-neutral-800">{match.probabilities.draw}%</span>
                                   </div>
                                 </button>
                                 <button
                                   onClick={() => addToBetSlip(match, "away", match.odds.away)}
-                                  className="bg-neutral-800/60 hover:bg-neutral-800 p-1.5 rounded text-left px-2 border border-neutral-800 hover:border-neutral-700 transition-all flex flex-col"
+                                  className="bg-[#131722]/50 hover:bg-[#1b2230] border border-neutral-800/60 hover:border-neutral-600 p-3 rounded-2xl transition-all duration-200 flex flex-col items-center justify-between gap-1 cursor-pointer active:scale-95 group/odd"
                                 >
-                                  <span className="text-[9px] text-neutral-500 uppercase">2 ({match.awayTeam})</span>
-                                  <div className="flex justify-between items-baseline mt-0.5">
-                                    <span className="text-xs font-mono font-bold text-neutral-200">{match.odds.away}</span>
-                                    <span className="text-[10px] text-red-400 font-mono">{match.probabilities.away}%</span>
+                                  <span className="text-[9.5px] text-neutral-450 uppercase font-mono font-black tracking-widest text-center truncate w-full group-hover/odd:text-neutral-300">2 ({match.awayTeam.substring(0,3)})</span>
+                                  <div className="flex flex-col sm:flex-row justify-between items-center w-full mt-1.5 gap-1 pt-1 border-t border-neutral-800/30">
+                                    <span className="text-sm font-black font-mono text-white group-hover/odd:text-red-400 transition-colors">@{match.odds.away}</span>
+                                    <span className="text-[10px] text-red-450 font-mono font-extrabold bg-red-500/5 px-2 py-0.5 rounded-full border border-red-500/10">{match.probabilities.away}%</span>
                                   </div>
                                 </button>
                               </div>
 
-                              {/* Footer Action items */}
-                              <div className="flex items-center justify-between text-xs pt-1 border-t border-neutral-800/60">
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-[9px] text-neutral-500 uppercase">Sugestão:</span>
-                                  <span className="bg-green-500/10 text-green-400 px-2 py-0.5 rounded text-[10px] font-bold italic">
+                              {/* Footer Action items with spacious padding */}
+                              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs pt-4 border-t border-neutral-800/80">
+                                <div className="flex items-center gap-2.5">
+                                  <span className="text-[9.5px] text-neutral-400 uppercase font-black tracking-widest font-mono">Dica de IA:</span>
+                                  <span className="bg-gradient-to-r from-[#00D26A]/10 to-emerald-500/10 border border-[#00D26A]/30 text-[#00D26A] px-3.5 py-1 rounded-full text-xs font-extrabold shadow-[0_0_15px_rgba(0,210,106,0.15)] tracking-wide flex items-center gap-1.5">
                                     {match.iaMarketSuggestion}
                                   </span>
                                 </div>
-                                <div className="flex gap-2">
+                                <div className="flex gap-2 w-full sm:w-auto">
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       setShareMatch(match);
                                     }}
-                                    className="px-2.5 py-1 rounded text-xs font-semibold flex items-center gap-1 bg-neutral-800 hover:bg-neutral-700 text-neutral-300 transition-all border border-neutral-800 hover:border-neutral-750"
+                                    className="px-3.5 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 bg-[#131722] hover:bg-neutral-800 text-neutral-300 hover:text-white transition-all border border-neutral-800/80 cursor-pointer flex-1 sm:flex-initial"
                                     title="Compartilhar Palpite"
                                   >
-                                    <Share2 className="w-3 h-3 text-green-400" />
-                                    <span className="hidden sm:inline">Compartilhar</span>
+                                    <Share2 className="w-4 h-4 text-[#00D26A]" />
+                                    <span>Compartilhar</span>
                                   </button>
                                   <button
                                     onClick={() => setSelectedMatch(selectedMatch?.id === match.id ? null : match)}
-                                    className={`px-3 py-1 rounded text-xs font-semibold flex items-center gap-1 transition-all ${
+                                    className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer flex-1 sm:flex-initial ${
                                       selectedMatch?.id === match.id
-                                        ? "bg-neutral-700 text-white"
-                                        : "bg-neutral-800 hover:bg-neutral-700 text-neutral-300"
+                                        ? "bg-neutral-700 text-white border border-neutral-600"
+                                        : "bg-[#131722] hover:bg-neutral-800 text-neutral-300 hover:text-white border border-neutral-800/80"
                                     }`}
                                   >
-                                    <Sliders className="w-3 h-3" />
-                                    {selectedMatch?.id === match.id ? "Fechar" : "Estatísticas IA"}
+                                    <Sliders className="w-4 h-4 text-neutral-400" />
+                                    {selectedMatch?.id === match.id ? "Fechar" : "Ficha IA"}
                                   </button>
                                   <button
                                     onClick={() => addToBetSlip(match, "home", match.odds.home)}
-                                    className="bg-green-500 hover:bg-green-400 text-black font-bold px-3 py-1 rounded"
+                                    className="bg-gradient-to-r from-[#00D26A] to-[#00A94E] hover:brightness-115 text-black font-extrabold px-4.5 py-2 rounded-xl active:scale-95 transition-all text-xs cursor-pointer flex-1 sm:flex-initial shadow-[0_4px_16px_rgba(0,210,106,0.3)] hover:shadow-[0_4px_22px_rgba(0,210,106,0.45)]"
                                   >
-                                    Adicionar +
+                                    Selecionar
                                   </button>
                                 </div>
                               </div>
@@ -2065,41 +2552,115 @@ export default function App() {
                         {/* TAB 1: ANALISE */}
                         {selectedMatchTab === "analise" && (
                           <div className="flex flex-col space-y-4 flex-1">
+                            {/* Neural Active Scanning Sequence */}
+                            <div className="bg-[#14181f]/80 border border-neutral-800 p-3.5 rounded-xl space-y-2 shadow-inner">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] font-black text-[#00D26A] flex items-center gap-1.5 font-mono uppercase">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-[#00D26A] animate-ping"></span>
+                                  {matchAnalysisProgress < 100 ? "🤖 IA Analisando..." : "🤖 IA Análise Concluída"}
+                                </span>
+                                <span className="text-[10px] font-mono text-neutral-450 font-black">{matchAnalysisProgress}%</span>
+                              </div>
+                              
+                              <div className="space-y-1 text-[10px] font-mono">
+                                <div className="flex items-center gap-2">
+                                  <span className={matchAnalysisProgress >= 20 ? "text-green-500 font-bold" : "text-neutral-600 animate-pulse"}>
+                                    {matchAnalysisProgress >= 20 ? "✔" : "⚡"}
+                                  </span>
+                                  <span className={matchAnalysisProgress >= 20 ? "text-neutral-200 font-medium" : "text-neutral-500"}>Form & Histórico de Confrontos</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className={matchAnalysisProgress >= 50 ? "text-green-500 font-bold" : "text-neutral-600 animate-pulse"}>
+                                    {matchAnalysisProgress >= 50 ? "✔" : "⚡"}
+                                  </span>
+                                  <span className={matchAnalysisProgress >= 50 ? "text-neutral-200 font-medium" : "text-neutral-500"}>Lineups & Escalações Estimadas</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className={matchAnalysisProgress >= 85 ? "text-green-500 font-bold" : "text-neutral-600 animate-pulse"}>
+                                    {matchAnalysisProgress >= 85 ? "✔" : "⚡"}
+                                  </span>
+                                  <span className={matchAnalysisProgress >= 85 ? "text-neutral-200 font-medium" : "text-neutral-500"}>Sentiment & Assimetria de Odds</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className={matchAnalysisProgress >= 100 ? "text-[#00D26A] font-bold" : "text-neutral-600"}>
+                                    {matchAnalysisProgress >= 100 ? "✔" : "⚡"}
+                                  </span>
+                                  <span className={matchAnalysisProgress >= 100 ? "text-[#00D26A] font-bold" : "text-neutral-500"}>Concluído • Sugestão Disponível</span>
+                                </div>
+                              </div>
+                            </div>
+
                             {/* Visual Attacking/Defending indicators */}
-                            <div className="space-y-3">
-                              <h4 className="text-[10px] uppercase text-neutral-400 font-bold tracking-wider">Métricas Comparativas</h4>
-                              <div className="space-y-2">
+                            {/* Visual Attacking/Defending indicators - Radar do Jogo */}
+                            <div className="bg-[#131722] border border-neutral-800/80 rounded-xl p-3.5 space-y-3.5 shadow-inner">
+                              <div className="flex items-center justify-between pb-1.5 border-b border-neutral-800/40">
+                                <h4 className="text-[10px] uppercase text-neutral-400 font-extrabold tracking-widest flex items-center gap-1.5">
+                                  <BarChart3 className="w-3.5 h-3.5 text-[#00D26A]" /> Comparador Técnico & Radar
+                                </h4>
+                                <span className="text-[9px] bg-neutral-900 border border-neutral-800 text-neutral-400 px-1.5 py-0.5 rounded font-mono font-bold">VS</span>
+                              </div>
+                              <div className="space-y-2.5 text-[10px]">
+                                {/* ATAQUE */}
                                 <div>
                                   <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
-                                    <span>Força Ofensiva ({activeMatchDetails.homeTeam})</span>
-                                    <span className="font-mono text-green-400">{activeMatchDetails.attackingStrength.home}%</span>
-                                  </div>
-                                  <div className="w-full bg-neutral-800 h-1 rounded-full overflow-hidden">
-                                    <div className="bg-green-500 h-full" style={{ width: `${activeMatchDetails.attackingStrength.home}%` }}></div>
-                                  </div>
-                                </div>
-
-                                <div>
-                                  <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
-                                    <span>Força Ofensiva ({activeMatchDetails.awayTeam})</span>
-                                    <span className="font-mono text-red-400">{activeMatchDetails.attackingStrength.away}%</span>
-                                  </div>
-                                  <div className="w-full bg-neutral-800 h-1 rounded-full overflow-hidden">
-                                    <div className="bg-red-500 h-full" style={{ width: `${activeMatchDetails.attackingStrength.away}%` }}></div>
-                                  </div>
-                                </div>
-
-                                <div>
-                                  <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
-                                    <span>Compactação Defensiva</span>
-                                    <span className="font-mono text-white">
-                                      {activeMatchDetails.defendingStrength.home} vs {activeMatchDetails.defendingStrength.away}
+                                    <span>Ataque: {activeMatchDetails.homeTeam} vs {activeMatchDetails.awayTeam}</span>
+                                    <span className="font-mono text-white font-semibold">
+                                      {activeMatchDetails.attackingStrength.home}% vs {activeMatchDetails.attackingStrength.away}%
                                     </span>
                                   </div>
-                                  <div className="w-full bg-neutral-800 h-1 rounded-full overflow-hidden flex">
-                                    <div className="bg-green-500 h-full" style={{ width: "50%" }}></div>
-                                    <div className="bg-neutral-700 w-0.5 h-full"></div>
-                                    <div className="bg-amber-500 h-full" style={{ width: "50%" }}></div>
+                                  <div className="h-1.5 bg-neutral-900 rounded-full overflow-hidden flex border border-neutral-800/30">
+                                    <div className="bg-green-500 h-full rounded-l-full transition-all duration-500" style={{ width: `${(activeMatchDetails.attackingStrength.home / (activeMatchDetails.attackingStrength.home + activeMatchDetails.attackingStrength.away)) * 100}%` }}></div>
+                                    <div className="bg-red-500 h-full rounded-r-full transition-all duration-500" style={{ width: `${(activeMatchDetails.attackingStrength.away / (activeMatchDetails.attackingStrength.home + activeMatchDetails.attackingStrength.away)) * 100}%` }}></div>
+                                  </div>
+                                </div>
+
+                                {/* DEFESA */}
+                                <div>
+                                  <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
+                                    <span>Defesa: {activeMatchDetails.homeTeam} vs {activeMatchDetails.awayTeam}</span>
+                                    <span className="font-mono text-white font-semibold">
+                                      {activeMatchDetails.defendingStrength.home}% vs {activeMatchDetails.defendingStrength.away}%
+                                    </span>
+                                  </div>
+                                  <div className="h-1.5 bg-neutral-900 rounded-full overflow-hidden flex border border-neutral-800/30">
+                                    <div className="bg-green-500 h-full rounded-l-full transition-all duration-500" style={{ width: `${(activeMatchDetails.defendingStrength.home / (activeMatchDetails.defendingStrength.home + activeMatchDetails.defendingStrength.away)) * 100}%` }}></div>
+                                    <div className="bg-red-500 h-full rounded-r-full transition-all duration-500" style={{ width: `${(activeMatchDetails.defendingStrength.away / (activeMatchDetails.defendingStrength.home + activeMatchDetails.defendingStrength.away)) * 100}%` }}></div>
+                                  </div>
+                                </div>
+
+                                {/* POSSE */}
+                                <div>
+                                  <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
+                                    <span>Posse Estimada: {activeMatchDetails.homeTeam} vs {activeMatchDetails.awayTeam}</span>
+                                    <span className="font-mono text-white font-semibold">
+                                      {activeMatchDetails.stats?.possession ? `${activeMatchDetails.stats.possession[0]}% - ${activeMatchDetails.stats.possession[1]}%` : "54% - 46%"}
+                                    </span>
+                                  </div>
+                                  <div className="h-1.5 bg-neutral-900 rounded-full overflow-hidden flex border border-neutral-800/30">
+                                    <div className="bg-green-500 h-full rounded-l-full transition-all duration-500" style={{ width: activeMatchDetails.stats?.possession ? `${activeMatchDetails.stats.possession[0]}%` : "54%" }}></div>
+                                    <div className="bg-red-500 h-full rounded-r-full transition-all duration-500" style={{ width: activeMatchDetails.stats?.possession ? `${activeMatchDetails.stats.possession[1]}%` : "46%" }}></div>
+                                  </div>
+                                </div>
+
+                                {/* FORMA */}
+                                <div>
+                                  <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
+                                    <span>Forma Recente & Tendência</span>
+                                    <span className="font-mono text-[#00D26A] font-semibold">{activeMatchDetails.iaConfidence >= 88 ? "Excelente (Muito Alta)" : "Regular (Alta)"}</span>
+                                  </div>
+                                  <div className="h-1.5 bg-neutral-900 rounded-full overflow-hidden border border-neutral-800/30">
+                                    <div className="bg-gradient-to-r from-emerald-500 to-[#00D26A] h-full rounded-full transition-all duration-500" style={{ width: `${activeMatchDetails.iaConfidence}%` }}></div>
+                                  </div>
+                                </div>
+
+                                {/* MOTIVAÇÃO */}
+                                <div>
+                                  <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
+                                    <span>Fator Motivação & Engajamento</span>
+                                    <span className="font-mono text-amber-400 font-semibold">85%</span>
+                                  </div>
+                                  <div className="h-1.5 bg-neutral-900 rounded-full overflow-hidden border border-neutral-800/30">
+                                    <div className="bg-gradient-to-r from-yellow-500 to-amber-400 h-full rounded-full transition-all duration-500" style={{ width: "85%" }}></div>
                                   </div>
                                 </div>
                               </div>
@@ -2122,6 +2683,80 @@ export default function App() {
                                   "{aiAnalyses[activeMatchDetails.id] || activeMatchDetails.iaAnalysis}"
                                 </p>
                               )}
+                            </div>
+
+                            {/* Semáforo de Valor & Motivos da IA */}
+                            <div className="bg-gradient-to-br from-[#1c222e] to-[#12161f] border border-neutral-850 rounded-xl p-3.5 space-y-3.5 shadow-md">
+                              <div className="flex items-center justify-between">
+                                <span className="text-[10px] uppercase font-extrabold text-neutral-400 tracking-wider">Análise de Valor do Mercado</span>
+                                {/* Semáforo de Valor */}
+                                <span className={`text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full border flex items-center gap-1.5 ${
+                                  activeMatchDetails.iaConfidence >= 88 
+                                    ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" 
+                                    : activeMatchDetails.iaConfidence >= 75
+                                    ? "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                                    : "bg-red-500/10 text-red-400 border-red-500/20"
+                                }`}>
+                                  <span className={`w-1.5 h-1.5 rounded-full ${
+                                    activeMatchDetails.iaConfidence >= 88 ? "bg-emerald-400 animate-pulse" : activeMatchDetails.iaConfidence >= 75 ? "bg-amber-400" : "bg-red-400"
+                                  }`}></span>
+                                  {activeMatchDetails.iaConfidence >= 88 
+                                    ? "Excelente Valor" 
+                                    : activeMatchDetails.iaConfidence >= 75
+                                    ? "Valor Moderado"
+                                    : "Odd abaixo do ideal"}
+                                </span>
+                              </div>
+
+                              {/* Index de Confiança Animado */}
+                              <div className="space-y-1">
+                                <div className="flex justify-between items-center text-[10px] text-neutral-400">
+                                  <span>Confiança do Algoritmo</span>
+                                  <span className="font-black text-[#00D26A] font-mono">{activeMatchDetails.iaConfidence}% ({activeMatchDetails.iaConfidence >= 88 ? "Muito Alta" : activeMatchDetails.iaConfidence >= 75 ? "Alta" : "Moderada"})</span>
+                                </div>
+                                <div className="relative w-full bg-neutral-950 h-2 rounded-full overflow-hidden p-0.5 border border-neutral-800/60">
+                                  <div 
+                                    className="bg-gradient-to-r from-emerald-500 via-[#00D26A] to-[#00A94E] h-full rounded-full transition-all duration-500 ease-out shadow-[0_0_12px_rgba(0,210,106,0.5)]" 
+                                    style={{ width: `${activeMatchDetails.iaConfidence}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+
+                              {/* Motivos da IA */}
+                              <div className="space-y-2 border-t border-neutral-800/60 pt-2.5">
+                                <div className="text-[10px] uppercase font-black text-neutral-400 tracking-wider flex items-center gap-1.5">
+                                  <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Motivos da Inteligência Artificial
+                                </div>
+                                <ul className="space-y-1.5 text-[11px] text-neutral-300">
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-[#00D26A] font-black shrink-0">✔</span>
+                                    <span>Média de {activeMatchDetails.iaConfidence > 85 ? "3,1" : "2,5"} gols nos últimos 10 jogos no retrospecto geral.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-[#00D26A] font-black shrink-0">✔</span>
+                                    <span>Ambas marcaram em {activeMatchDetails.iaConfidence - 3}% das rodadas recentes analisadas.</span>
+                                  </li>
+                                  {activeMatchDetails.injuries?.away && activeMatchDetails.injuries.away.length > 0 ? (
+                                    <li className="flex items-start gap-1.5">
+                                      <span className="text-[#00D26A] font-black shrink-0">✔</span>
+                                      <span>Defesa visitante desfalcada: ausência de {activeMatchDetails.injuries.away[0]}.</span>
+                                    </li>
+                                  ) : (
+                                    <li className="flex items-start gap-1.5">
+                                      <span className="text-[#00D26A] font-black shrink-0">✔</span>
+                                      <span>Ataque em alto rendimento sob xG positivo acumulado.</span>
+                                    </li>
+                                  )}
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-[#00D26A] font-black shrink-0">✔</span>
+                                    <span>Árbitro {activeMatchDetails.referee || "escalado"} com média estatística alta de cartões favorecendo mercado.</span>
+                                  </li>
+                                  <li className="flex items-start gap-1.5">
+                                    <span className="text-[#00D26A] font-black shrink-0">✔</span>
+                                    <span>Mercado precificado com assimetria de +{(activeMatchDetails.iaConfidence * 0.15).toFixed(1)}% EV+.</span>
+                                  </li>
+                                </ul>
+                              </div>
                             </div>
 
                             {/* Real-time Interactive AI Consultation Chat */}
@@ -2182,6 +2817,79 @@ export default function App() {
                         {/* TAB 2: ESTATISTICAS */}
                         {selectedMatchTab === "estatisticas" && (
                           <div className="flex flex-col space-y-4">
+                            {/* Recharts Fluctuation Chart */}
+                            <div className="bg-[#131722] border border-neutral-800/80 rounded-xl p-3.5 space-y-2.5 shadow-inner">
+                              <h4 className="text-[10px] uppercase text-neutral-400 font-extrabold tracking-widest flex items-center gap-1.5 border-b border-neutral-800/40 pb-1.5">
+                                <TrendingUp className="w-3.5 h-3.5 text-[#00D26A]" /> Flutuação de Probabilidades
+                              </h4>
+                              <div className="h-44 w-full text-[10px] select-none">
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <LineChart
+                                    data={getProbabilityTrendData(activeMatchDetails)}
+                                    margin={{ top: 5, right: 10, left: -25, bottom: 5 }}
+                                  >
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" opacity={0.4} />
+                                    <XAxis 
+                                      dataKey="minute" 
+                                      stroke="#4b5563" 
+                                      fontSize={9}
+                                      tickLine={false}
+                                    />
+                                    <YAxis 
+                                      stroke="#4b5563" 
+                                      fontSize={9}
+                                      domain={[0, 100]}
+                                      tickCount={5}
+                                      tickLine={false}
+                                    />
+                                    <Tooltip
+                                      contentStyle={{
+                                        backgroundColor: "#0d0f14",
+                                        borderColor: "#1f2937",
+                                        borderRadius: "6px",
+                                        fontSize: "10px",
+                                        color: "#f3f4f6"
+                                      }}
+                                    />
+                                    <Legend 
+                                      verticalAlign="top" 
+                                      height={24} 
+                                      iconSize={8}
+                                      iconType="circle"
+                                      wrapperStyle={{ fontSize: "9px" }}
+                                    />
+                                    <Line
+                                      name={activeMatchDetails.homeTeam.substring(0, 10)}
+                                      type="monotone"
+                                      dataKey="home"
+                                      stroke="#10b981"
+                                      strokeWidth={2}
+                                      dot={{ r: 2 }}
+                                      activeDot={{ r: 4 }}
+                                    />
+                                    <Line
+                                      name="Empate"
+                                      type="monotone"
+                                      dataKey="draw"
+                                      stroke="#737373"
+                                      strokeWidth={1.5}
+                                      dot={{ r: 2 }}
+                                      activeDot={{ r: 4 }}
+                                    />
+                                    <Line
+                                      name={activeMatchDetails.awayTeam.substring(0, 10)}
+                                      type="monotone"
+                                      dataKey="away"
+                                      stroke="#ef4444"
+                                      strokeWidth={2}
+                                      dot={{ r: 2 }}
+                                      activeDot={{ r: 4 }}
+                                    />
+                                  </LineChart>
+                                </ResponsiveContainer>
+                              </div>
+                            </div>
+
                             {activeMatchDetails.stats ? (
                               <div className="space-y-4 bg-neutral-950/40 p-3 rounded-lg border border-neutral-850">
                                 <div className="flex justify-between items-center text-[10px] text-neutral-400 font-bold uppercase tracking-wider border-b border-neutral-800 pb-1 mb-2">
@@ -2297,6 +3005,423 @@ export default function App() {
                     );
                   })()}
 
+                </div>
+              </div>
+
+              {/* 3. SUGESTÕES IA & ASSISTENTE DIGITAL */}
+              <div className="space-y-3 pt-2">
+                <div className="space-y-0.5">
+                  <h3 className="text-[10px] uppercase text-neutral-400 font-extrabold tracking-widest flex items-center gap-1.5">
+                    <span className="h-1.5 w-1.5 bg-green-500 rounded-full animate-pulse"></span>
+                    3. Sugestões de Mercado & Assistente de IA
+                  </h3>
+                  <p className="text-[11px] text-neutral-500">Insights analíticos proativos e assistente esportivo interativo em tempo real.</p>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+                  {/* Assistant Interactive Chat Card */}
+                  <div className="lg:col-span-7 bg-neutral-900 border border-neutral-800 rounded-xl p-4 flex flex-col justify-between relative overflow-hidden group hover:border-neutral-700 transition-all">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-green-500/5 rounded-full blur-2xl pointer-events-none"></div>
+                    
+                    <div className="flex items-start gap-3.5">
+                      {/* Avatar design */}
+                      <div className="relative shrink-0 mt-1">
+                        <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-green-500 to-emerald-400 flex items-center justify-center text-black font-extrabold text-lg shadow-lg relative z-10 animate-pulse">
+                          🤖
+                        </div>
+                        <div className="absolute inset-0 rounded-full border border-green-500/40 animate-ping opacity-75"></div>
+                        <div className="absolute -inset-1.5 rounded-full border border-dashed border-green-500/20 animate-spin [animation-duration:12s]"></div>
+                        <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full bg-green-500 border-2 border-neutral-900 z-20" title="Online"></span>
+                      </div>
+
+                      {/* Text Bubble */}
+                      <div className="space-y-1 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-bold text-green-400 tracking-wider uppercase font-mono">Conselheiro Virtual BetVision</span>
+                          <span className="text-[9px] text-neutral-500 font-mono">AGORA</span>
+                        </div>
+                        
+                        <div className="bg-neutral-950/80 border border-neutral-850/60 rounded-xl p-3 text-neutral-200 text-xs leading-relaxed font-sans relative">
+                          {isDashboardAiTyping ? (
+                            <div className="flex items-center gap-1.5 py-1">
+                              <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce"></span>
+                              <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce [animation-delay:0.2s]"></span>
+                              <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-bounce [animation-delay:0.4s]"></span>
+                              <span className="text-[10px] text-neutral-500 font-mono ml-1.5">Analisando probabilidades neurais...</span>
+                            </div>
+                          ) : (
+                            <p className="whitespace-pre-line">{dashboardAiAnswer}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick Questions Grid */}
+                    <div className="mt-4 pt-3.5 border-t border-neutral-850 space-y-2">
+                      <span className="text-[9px] uppercase tracking-wider text-neutral-500 font-extrabold font-mono block">Consulte a IA Instantaneamente:</span>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <button
+                          onClick={() => {
+                            if (isDashboardAiTyping) return;
+                            setIsDashboardAiTyping(true);
+                            setTimeout(() => {
+                              const bestMatches = [...matches]
+                                .sort((a, b) => b.iaConfidence - a.iaConfidence)
+                                .slice(0, 2);
+                              const match1 = bestMatches[0];
+                              const match2 = bestMatches[1];
+                              
+                              setDashboardAiAnswer(
+                                `🎯 *PALPITES QUENTES DO DIA (Confiança Absoluta)*\n\n` +
+                                `1️⃣ **${match1.homeTeam} x ${match1.awayTeam}** (${match1.league})\n` +
+                                `   • Indicação: *${match1.iaMarketSuggestion}*\n` +
+                                `   • Confiança Algorítmica: **${match1.iaConfidence}%** (Alta Precisão)\n` +
+                                `   • Odd Estimada: @${match1.odds.home}\n\n` +
+                                `2️⃣ **${match2.homeTeam} x ${match2.awayTeam}** (${match2.league})\n` +
+                                `   • Indicação: *${match2.iaMarketSuggestion}*\n` +
+                                `   • Confiança Algorítmica: **${match2.iaConfidence}%**\n` +
+                                `   • Odd Estimada: @${match2.odds.home}\n\n` +
+                                `💡 *Dica:* Clique em "Selecionar" no card da partida acima para carregar estes palpites diretamente no seu cupom!`
+                              );
+                              setIsDashboardAiTyping(false);
+                            }, 900);
+                          }}
+                          disabled={isDashboardAiTyping}
+                          className="bg-neutral-950 hover:bg-neutral-850 text-neutral-300 hover:text-white border border-neutral-850 hover:border-green-500/20 text-[10px] font-semibold py-2 px-2.5 rounded-lg text-left transition-all flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <span className="text-green-500">🔍</span> Palpites Quentes
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            if (isDashboardAiTyping) return;
+                            setIsDashboardAiTyping(true);
+                            setTimeout(() => {
+                              const minVal = riskLimits.enabledMinBankroll ? riskLimits.minBankroll ?? 500 : 0;
+                              const margin = userBalance - minVal;
+                              let recommendation = "";
+                              
+                              if (userBalance <= minVal) {
+                                recommendation = "🛑 SEU SALDO ALCANÇOU A BANCA MÍNIMA DE PROTEÇÃO. Novas apostas estão bloqueadas para evitar a quebra do seu caixa. Redefina seus limites na seção de Gestão de Risco para reativar.";
+                              } else if (margin < 300) {
+                                recommendation = `⚠️ ALERTA: Seu saldo de R$ ${userBalance.toFixed(2)} está muito próximo do seu limite de banca de segurança (R$ ${minVal.toFixed(2)}). Sugiro reduzir sua stake para no máximo R$ 20.00 por entrada para mitigar riscos de oscilação temporária.`;
+                              } else {
+                                recommendation = `📊 DIAGNÓSTICO: Seu saldo está saudável em R$ ${userBalance.toFixed(2)} (Margem de R$ ${margin.toFixed(2)} sobre a banca mínima de proteção). A IA recomenda uma gestão conservadora de até 5% (R$ ${(userBalance * 0.05).toFixed(2)}) por bilhete múltiplo.`;
+                              }
+                              
+                              setDashboardAiAnswer(
+                                `📈 *RELATÓRIO DE GESTÃO E BLINDAGEM DE BANCA*\n\n` +
+                                `• Saldo Atual: **R$ ${userBalance.toFixed(2)}**\n` +
+                                `• Banca Mínima Protegida: **R$ ${minVal.toFixed(2)}** (${riskLimits.enabledMinBankroll ? "Ativo" : "Inativo"})\n` +
+                                `• Status de Risco: *${userBalance <= minVal ? "BLOQUEADO" : margin < 300 ? "ATENÇÃO" : "SAUDÁVEL"}*\n\n` +
+                                `${recommendation}`
+                              );
+                              setIsDashboardAiTyping(false);
+                            }, 900);
+                          }}
+                          disabled={isDashboardAiTyping}
+                          className="bg-neutral-950 hover:bg-neutral-850 text-neutral-300 hover:text-white border border-neutral-850 hover:border-green-500/20 text-[10px] font-semibold py-2 px-2.5 rounded-lg text-left transition-all flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <span className="text-emerald-500">📈</span> Diagnóstico de Banca
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            if (isDashboardAiTyping) return;
+                            setIsDashboardAiTyping(true);
+                            setTimeout(() => {
+                              setDashboardAiAnswer(
+                                `🏆 *ANÁLISE DE MERCADOS E MELHORES LIGAS*\n\n` +
+                                `• **Premier League (Inglaterra):** Apresenta assertividade histórica de **92.4%** em mercados de vitória do mandante (Favoritos Clássicos) neste mês.\n\n` +
+                                `• **La Liga (Espanha):** Altíssima incidência de *Under Gols* no primeiro tempo e *Over Gols* no segundo tempo (Desvio de +14.8% tático).\n\n` +
+                                `• **Brasileirão Série A:** Excelente liquidez em *Ambas Marcam (BTTS)* com média de @1.92 nas últimas rodadas, perfeito para entradas combinadas de valor.`
+                              );
+                              setIsDashboardAiTyping(false);
+                            }, 900);
+                          }}
+                          disabled={isDashboardAiTyping}
+                          className="bg-neutral-950 hover:bg-neutral-850 text-neutral-300 hover:text-white border border-neutral-850 hover:border-green-500/20 text-[10px] font-semibold py-2 px-2.5 rounded-lg text-left transition-all flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <span className="text-amber-500">🏆</span> Melhores Ligas
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* AI Critical Insights Column */}
+                  <div className="lg:col-span-5 flex flex-col gap-3">
+                    <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-3.5 space-y-3 flex-1 flex flex-col justify-between">
+                      <div className="space-y-1">
+                        <span className="text-[9px] font-extrabold uppercase tracking-widest text-neutral-500 font-mono block">Sinais Neurais Recentes</span>
+                        <div className="space-y-2">
+                          <div className="bg-neutral-950/60 p-2 rounded-lg border border-neutral-850 flex items-start gap-2 text-[11px]">
+                            <span className="text-xs shrink-0 mt-0.5">📊</span>
+                            <div>
+                              <span className="font-bold text-neutral-200 block">Distorção de Preço (La Liga)</span>
+                              <span className="text-neutral-400">Modelos acusam cotação de @1.90 descompensada para gols. Margem de lucro de +18% detectada.</span>
+                            </div>
+                          </div>
+                          
+                          <div className="bg-neutral-950/60 p-2 rounded-lg border border-neutral-850 flex items-start gap-2 text-[11px]">
+                            <span className="text-xs shrink-0 mt-0.5">🔥</span>
+                            <div>
+                              <span className="font-bold text-neutral-200 block">Tendência Acumulada de Cantos</span>
+                              <span className="text-neutral-400">Média de 10.4 escanteios em jogos ao vivo da Premier League quando o mandante pressiona nos minutos finais.</span>
+                            </div>
+                          </div>
+
+                          <div className="bg-neutral-950/60 p-2 rounded-lg border border-neutral-850 flex items-start gap-2 text-[11px]">
+                            <span className="text-xs shrink-0 mt-0.5">⚡</span>
+                            <div>
+                              <span className="font-bold text-neutral-200 block">Fadiga Defensiva Mapeada</span>
+                              <span className="text-neutral-400">O time visitante do Brasileirão sofre 70% dos seus gols após os 75 minutos devido a desequilíbrio físico.</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="bg-green-500/5 border border-green-500/20 p-2.5 rounded-lg text-[10px] text-green-400 flex items-center gap-2">
+                        <span className="relative flex h-2 w-2 shrink-0">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                        </span>
+                        <span className="font-medium">O motor de IA atualizou 142 variáveis estatísticas há 1 minuto.</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. GERADOR DE BILHETE INTELIGENTE IA */}
+              <div className="space-y-3 pt-2">
+                <div className="space-y-0.5">
+                  <h3 className="text-[10px] uppercase text-neutral-400 font-extrabold tracking-widest flex items-center gap-1.5">
+                    <span className="h-1.5 w-1.5 bg-amber-500 rounded-full"></span>
+                    4. Gerador de Bilhete Inteligente IA
+                  </h3>
+                  <p className="text-[11px] text-neutral-500">Monte apostas combinadas automáticas alinhando alta matemática e o perfil de risco desejado.</p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
+                  {/* Generator Panel */}
+                  <div className="md:col-span-5 bg-neutral-900 border border-neutral-800 rounded-xl p-4 space-y-4">
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-[9px] uppercase font-bold text-neutral-400 tracking-wider block mb-1.5">Quantidade de Jogos</label>
+                        <div className="grid grid-cols-4 gap-1.5">
+                          {[2, 3, 4, 5].map((num) => (
+                            <button
+                              key={num}
+                              onClick={() => setGenGamesCount(num)}
+                              className={`py-1.5 text-xs font-mono font-bold rounded-lg transition-all cursor-pointer ${
+                                genGamesCount === num 
+                                  ? "bg-green-500 text-black shadow-md shadow-green-500/10" 
+                                  : "bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-neutral-200 border border-neutral-850"
+                              }`}
+                            >
+                              {num} {num === 2 ? "Duo" : num === 3 ? "Trio" : "Jogos"}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-[9px] uppercase font-bold text-neutral-400 tracking-wider block mb-1.5">Perfil de Risco do Bilhete</label>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {[
+                            { id: "conservative", name: "CONSERVADOR", color: "bg-green-500" },
+                            { id: "moderate", name: "MODERADO", color: "bg-amber-500" },
+                            { id: "aggressive", name: "AGRESSIVO", color: "bg-red-500" }
+                          ].map((level) => (
+                            <button
+                              key={level.id}
+                              onClick={() => setGenRiskLevel(level.id as any)}
+                              className={`py-1.5 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${
+                                genRiskLevel === level.id 
+                                  ? `${level.color} text-black font-extrabold shadow-lg` 
+                                  : "bg-neutral-950 hover:bg-neutral-850 text-neutral-400 hover:text-neutral-200 border border-neutral-850"
+                              }`}
+                            >
+                              {level.name}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-[9px] uppercase font-bold text-neutral-400 tracking-wider block mb-1.5">Foco de Mercado</label>
+                        <select
+                          value={genMarketType}
+                          onChange={(e: any) => setGenMarketType(e.target.value)}
+                          className="w-full bg-neutral-950 border border-neutral-850 text-xs py-2 px-2.5 rounded-lg text-neutral-200 focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500/20"
+                        >
+                          <option value="misto">Misto (Recomendado pela IA)</option>
+                          <option value="gols">Mercado de Gols (Over / Under)</option>
+                          <option value="vencedor">Vencedor Final (1X2)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="text-[9px] uppercase font-bold text-neutral-400 tracking-wider">Valor de Entrada Recomendado</label>
+                          <span className="text-xs font-mono font-bold text-green-400">R$ {betAmount}</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="range"
+                            min="20"
+                            max="1000"
+                            step="10"
+                            value={betAmount}
+                            onChange={(e) => setBetAmount(parseInt(e.target.value))}
+                            className="flex-1 h-1.5 bg-neutral-950 rounded-lg appearance-none cursor-pointer accent-green-500"
+                          />
+                        </div>
+                        <div className="grid grid-cols-4 gap-1 mt-2">
+                          {[20, 50, 100, 200].map((val) => (
+                            <button
+                              key={val}
+                              onClick={() => setBetAmount(val)}
+                              className={`py-1 text-[10px] font-semibold rounded font-mono ${
+                                betAmount === val ? "bg-neutral-800 text-white border-neutral-700" : "bg-neutral-950 text-neutral-500 hover:text-neutral-300 border border-neutral-900"
+                              } border transition-all cursor-pointer`}
+                            >
+                              +R$ {val}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={triggerMultiGenerator}
+                      disabled={isGenerating}
+                      className="w-full bg-green-500 hover:bg-green-400 text-black font-extrabold text-xs py-2.5 px-4 rounded-lg flex items-center justify-center gap-1.5 transition-all shadow-lg shadow-green-500/10 cursor-pointer hover:scale-[1.01] active:scale-95 disabled:opacity-50"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      {isGenerating ? "Processando Algoritmo de Probabilidades..." : "GERAR BILHETE INTELIGENTE IA ⚡"}
+                    </button>
+                  </div>
+
+                  {/* Generator Output */}
+                  <div className="md:col-span-7 flex flex-col">
+                    {isGenerating ? (
+                      <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-8 text-center space-y-4 flex-1 flex flex-col items-center justify-center">
+                        <div className="relative w-12 h-12">
+                          <div className="absolute inset-0 rounded-full border-4 border-green-500/10 border-t-green-500 animate-spin"></div>
+                          <div className="absolute inset-1.5 rounded-full border-4 border-amber-500/10 border-b-amber-500 animate-spin [animation-duration:1.5s]"></div>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-[10px] text-green-400 font-mono font-bold uppercase tracking-widest animate-pulse">Cruzando Dados Neurais</p>
+                          <p className="text-xs text-neutral-400 font-medium">{genProgressText}</p>
+                        </div>
+                      </div>
+                    ) : generatedSlipResult ? (
+                      <div className="bg-neutral-900 border border-green-500/20 rounded-xl p-4 flex-1 flex flex-col justify-between space-y-3.5 relative overflow-hidden animate-fade-in">
+                        <div className="absolute -top-10 -right-10 w-32 h-32 bg-green-500/5 rounded-full blur-3xl pointer-events-none"></div>
+                        
+                        <div className="flex items-center justify-between pb-2.5 border-b border-neutral-850">
+                          <div>
+                            <span className="text-[9px] bg-green-500/15 text-green-400 px-2 py-0.5 rounded-md font-bold uppercase tracking-wider font-mono">
+                              Palpites Combinados de Alta Precisão
+                            </span>
+                            <div className="text-[10px] text-neutral-500 mt-1 font-mono">Assinatura Digital: {generatedSlipResult.hash}</div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-[8px] text-neutral-500 uppercase block font-bold">Risco Estimado</span>
+                            <span className={`text-[11px] font-extrabold px-2 py-0.5 rounded font-mono ${
+                              generatedSlipResult.risk === "CONSERVADOR" ? "bg-green-500/10 text-green-400" : generatedSlipResult.risk === "MODERADO" ? "bg-amber-500/10 text-amber-400" : "bg-red-500/10 text-red-400 animate-pulse"
+                            }`}>{generatedSlipResult.risk}</span>
+                          </div>
+                        </div>
+
+                        {/* List of generated games */}
+                        <div className="space-y-2 max-h-[170px] overflow-y-auto pr-1">
+                          {generatedSlipResult.games.map((game: any, idx: number) => (
+                            <div key={idx} className="bg-neutral-950 p-2.5 rounded-lg border border-neutral-850 flex justify-between items-center text-xs hover:border-neutral-800 transition-colors">
+                              <div className="space-y-0.5">
+                                <div className="font-bold text-neutral-200">{game.match}</div>
+                                <div className="text-[10px] text-neutral-400 flex items-center gap-1.5">
+                                  <span>Mercado: <strong className="text-neutral-300 font-semibold">{game.market}</strong></span>
+                                  <span className="text-neutral-600">•</span>
+                                  <span className="text-green-500/90 font-mono">Confiança: {game.confidence}%</span>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <span className="bg-neutral-900 border border-neutral-800 text-green-400 px-2.5 py-1 rounded font-bold font-mono text-xs">@{game.odd.toFixed(2)}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Summary and actions */}
+                        <div className="bg-neutral-950 p-3 rounded-lg border border-neutral-850 flex flex-wrap gap-4 items-center justify-between">
+                          <div className="flex gap-4">
+                            <div>
+                              <span className="text-[9px] text-neutral-500 uppercase block">Cotação Total</span>
+                              <span className="text-sm font-mono font-extrabold text-white">@{generatedSlipResult.odds.toFixed(2)}</span>
+                            </div>
+                            <div className="border-l border-neutral-850 pl-4">
+                              <span className="text-[9px] text-neutral-500 uppercase block">Entrada Sugerida</span>
+                              <span className="text-sm font-mono font-extrabold text-neutral-300">R$ {betAmount}</span>
+                            </div>
+                            <div className="border-l border-neutral-850 pl-4">
+                              <span className="text-[9px] text-neutral-500 uppercase block">Retorno Potencial</span>
+                              <span className="text-sm font-mono font-extrabold text-green-400">R$ {(betAmount * generatedSlipResult.odds).toFixed(2)}</span>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                let clipText = `🎯 *BILHETE INTELIGENTE IA - BETVISION PRO* 🎯\n\n`;
+                                generatedSlipResult.games.forEach((g: any, i: number) => {
+                                  clipText += `${i + 1}. ⚽ *${g.match}*\n   Palpite: *${g.market}* | Cotação: @${g.odd.toFixed(2)} (${g.confidence}% confiança)\n\n`;
+                                });
+                                clipText += `📊 *Odd Final:* @${generatedSlipResult.odds.toFixed(2)}\n`;
+                                clipText += `💰 *Stake:* R$ ${betAmount}\n`;
+                                clipText += `🏆 *Retorno:* R$ ${(betAmount * generatedSlipResult.odds).toFixed(2)}\n`;
+                                navigator.clipboard.writeText(clipText);
+                                alert("✓ Conteúdo do bilhete copiado para a área de transferência!");
+                              }}
+                              className="bg-neutral-800 hover:bg-neutral-750 text-neutral-300 px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                              title="Copiar texto formatado"
+                            >
+                              <Share2 className="w-3 h-3 text-green-400" />
+                              Copiar Texto
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                // Add all selections to bet slip
+                                generatedSlipResult.games.forEach((game: any) => {
+                                  if (game.matchRef) {
+                                    addToBetSlip(game.matchRef, game.selection, game.odd);
+                                  }
+                                });
+                                triggerPushNotification(
+                                  "Cupom Importado",
+                                  "As seleções do Bilhete Inteligente IA foram transferidas com sucesso para seu cupom de apostas do dia!",
+                                  "info"
+                                );
+                                alert("✓ Seleções importadas para seu Cupom Ativo do Dia!");
+                              }}
+                              className="bg-green-500 hover:bg-green-400 text-black px-3 py-1.5 rounded-lg text-[10px] font-bold cursor-pointer transition-transform active:scale-95 flex items-center gap-1"
+                            >
+                              <Plus className="w-3 h-3" />
+                              Carregar Cupom Ativo
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-8 text-center text-neutral-400 text-xs flex-1 flex flex-col items-center justify-center space-y-2">
+                        <span>🔮</span>
+                        <p>Nenhum bilhete ativo gerado ainda.</p>
+                        <p className="text-[10px] text-neutral-500">Configure as opções ao lado e clique em "Gerar Bilhete Inteligente" para iniciar.</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -2912,6 +4037,28 @@ export default function App() {
                       currentStake={betAmount}
                     />
 
+                    {/* Real-Time Bet Slip Simulator */}
+                    <div className="bg-[#131722] border border-neutral-800/80 rounded-xl p-3 space-y-2.5 my-1">
+                      <div className="text-[10px] uppercase font-black text-neutral-400 tracking-wider flex items-center justify-between">
+                        <span>Simulador de Bilhete</span>
+                        <span className="text-[#00D26A] font-mono text-[9px] font-black animate-pulse">● LIVE PROJECTION</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-[11px] pt-0.5">
+                        <div className="bg-neutral-900/50 p-2 rounded-lg border border-neutral-850">
+                          <span className="text-[9px] text-neutral-500 block leading-none mb-1 uppercase font-bold">Probabilidade</span>
+                          <span className="font-mono text-white font-extrabold text-xs">
+                            {betSlip.length === 0 ? "0%" : `${Math.round(betSlip.reduce((acc, curr) => acc * (curr.match.iaConfidence / 100), 1) * 100)}%`}
+                          </span>
+                        </div>
+                        <div className="bg-neutral-900/50 p-2 rounded-lg border border-neutral-850">
+                          <span className="text-[9px] text-neutral-500 block leading-none mb-1 uppercase font-bold">Nível de Risco</span>
+                          <span className={`font-extrabold text-xs font-mono ${totalOdds < 2.0 ? "text-green-400" : totalOdds < 4.5 ? "text-amber-400" : "text-red-400"}`}>
+                            {betSlip.length === 0 ? "-" : totalOdds < 2.0 ? "Baixo" : totalOdds < 4.5 ? "Moderado" : "Elevado"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="flex justify-between items-center text-xs">
                       <span className="text-neutral-400">Odd Combinada:</span>
                       <span className="font-mono text-green-400 font-bold">@{totalOdds}</span>
@@ -2945,26 +4092,34 @@ export default function App() {
                       </div>
                     )}
 
-                    <div className="pt-2">
+                    <div className="pt-2 grid grid-cols-2 gap-2">
                       <button
                         onClick={copySlipToClipboard}
-                        className={`w-full font-bold text-xs py-3 rounded shadow-md transition-all flex items-center justify-center gap-1.5 active:scale-98 ${
+                        className={`font-bold text-[11px] py-3 px-1 rounded shadow-md transition-all flex items-center justify-center gap-1.5 active:scale-98 w-full ${
                           hasCopiedSlip
                             ? "bg-neutral-800 text-green-400 border border-green-500/30"
-                            : "bg-green-500 hover:bg-green-400 text-black cursor-pointer"
+                            : "bg-neutral-850 hover:bg-neutral-800 border border-neutral-750 text-neutral-300 cursor-pointer"
                         }`}
                       >
                         {hasCopiedSlip ? (
                           <>
-                            <Check className="w-4 h-4" />
-                            Palpites Copiados! 🚀
+                            <Check className="w-3.5 h-3.5 text-green-400" />
+                            Copiado!
                           </>
                         ) : (
                           <>
-                            <Copy className="w-4 h-4" />
-                            Copiar Bilhete de Palpites
+                            <Copy className="w-3.5 h-3.5" />
+                            Copiar
                           </>
                         )}
+                      </button>
+
+                      <button
+                        onClick={shareSlipViaWebAPI}
+                        className="font-bold text-[11px] py-3 px-1 rounded shadow-md transition-all flex items-center justify-center gap-1.5 active:scale-98 bg-green-500 hover:bg-green-400 text-black cursor-pointer w-full"
+                      >
+                        <Share2 className="w-3.5 h-3.5" />
+                        Compartilhar
                       </button>
                     </div>
                   </div>
@@ -3051,6 +4206,7 @@ export default function App() {
             onSimulateLoss={handleSimulateLoss}
             onResetSimulatedLosses={handleResetSimulatedLosses}
             onClose={() => setShowSettingsModal(false)}
+            userBalance={userBalance}
           />
         </div>
       )}
@@ -3226,6 +4382,28 @@ export default function App() {
                     currentStake={betAmount}
                   />
 
+                  {/* Real-Time Bet Slip Simulator */}
+                  <div className="bg-[#131722] border border-neutral-800/80 rounded-xl p-3 space-y-2.5 my-1">
+                    <div className="text-[10px] uppercase font-black text-neutral-400 tracking-wider flex items-center justify-between">
+                      <span>Simulador de Bilhete</span>
+                      <span className="text-[#00D26A] font-mono text-[9px] font-black animate-pulse">● LIVE PROJECTION</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px] pt-0.5">
+                      <div className="bg-neutral-900/50 p-2 rounded-lg border border-neutral-850">
+                        <span className="text-[9px] text-neutral-500 block leading-none mb-1 uppercase font-bold">Probabilidade</span>
+                        <span className="font-mono text-white font-extrabold text-xs">
+                          {betSlip.length === 0 ? "0%" : `${Math.round(betSlip.reduce((acc, curr) => acc * (curr.match.iaConfidence / 100), 1) * 100)}%`}
+                        </span>
+                      </div>
+                      <div className="bg-neutral-900/50 p-2 rounded-lg border border-neutral-850">
+                        <span className="text-[9px] text-neutral-500 block leading-none mb-1 uppercase font-bold">Nível de Risco</span>
+                        <span className={`font-extrabold text-xs font-mono ${totalOdds < 2.0 ? "text-green-400" : totalOdds < 4.5 ? "text-amber-400" : "text-red-400"}`}>
+                          {betSlip.length === 0 ? "-" : totalOdds < 2.0 ? "Baixo" : totalOdds < 4.5 ? "Moderado" : "Elevado"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-neutral-400">Odd Combinada:</span>
                     <span className="font-mono text-green-400 font-bold">@{totalOdds}</span>
@@ -3259,26 +4437,34 @@ export default function App() {
                     </div>
                   )}
 
-                  <div className="pt-2">
+                  <div className="pt-2 grid grid-cols-2 gap-2">
                     <button
                       onClick={copySlipToClipboard}
-                      className={`w-full font-bold text-xs py-3 rounded shadow-md transition-all flex items-center justify-center gap-1.5 active:scale-98 ${
+                      className={`font-bold text-xs py-3 px-1 rounded shadow-md transition-all flex items-center justify-center gap-1.5 active:scale-98 w-full ${
                         hasCopiedSlip
                           ? "bg-neutral-800 text-green-400 border border-green-500/30"
-                          : "bg-green-500 hover:bg-green-400 text-black cursor-pointer"
+                          : "bg-neutral-850 hover:bg-neutral-800 border border-neutral-750 text-neutral-300 cursor-pointer"
                       }`}
                     >
                       {hasCopiedSlip ? (
                         <>
-                          <Check className="w-4 h-4" />
-                          Palpites Copiados! 🚀
+                          <Check className="w-4 h-4 text-green-400" />
+                          Copiado!
                         </>
                       ) : (
                         <>
                           <Copy className="w-4 h-4" />
-                          Copiar Bilhete de Palpites
+                          Copiar
                         </>
                       )}
+                    </button>
+
+                    <button
+                      onClick={shareSlipViaWebAPI}
+                      className="font-bold text-xs py-3 px-1 rounded shadow-md transition-all flex items-center justify-center gap-1.5 active:scale-98 bg-green-500 hover:bg-green-400 text-black cursor-pointer w-full"
+                    >
+                      <Share2 className="w-4 h-4" />
+                      Compartilhar
                     </button>
                   </div>
                 </div>
@@ -3287,6 +4473,29 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* Floating Glowing Robot Copilot avatar */}
+      <div className="fixed bottom-24 right-6 z-40 hidden md:block">
+        <div className="relative group">
+          <div className="absolute inset-0 bg-gradient-to-tr from-[#00D26A] to-blue-500 rounded-full blur opacity-45 group-hover:opacity-100 transition-all duration-300 animate-pulse"></div>
+          <button
+            onClick={() => {
+              setActiveTab("dashboard");
+              triggerPushNotification(
+                "Copilot de Apostas",
+                "🤖 Olá! Sou o robô de inteligência da BetVision. Estou escaneando dados em tempo real no momento para você!",
+                "status"
+              );
+            }}
+            className="relative w-12 h-12 bg-[#1b212b] border border-neutral-800 hover:border-[#00D26A] rounded-full flex items-center justify-center text-xl shadow-[0_12px_30px_rgba(0,0,0,0.35)] cursor-pointer active:scale-95 transition-all"
+            title="Abrir Copilot de Apostas"
+          >
+            🤖
+            <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-[#1b212b] animate-ping"></span>
+            <span className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-[#1b212b]"></span>
+          </button>
+        </div>
+      </div>
 
       {/* Mock Push Notification Toast Floating Container */}
       <PushNotificationToastContainer 
